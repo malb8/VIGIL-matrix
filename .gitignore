@@ -1,0 +1,18 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Node (no dependencies by design; guard against accidental installs)
+node_modules/
+package-lock.json
+
+# Local artifacts
+*.zip
+*.crx
+*.pem
+
+# Distribution artifacts
+distro/

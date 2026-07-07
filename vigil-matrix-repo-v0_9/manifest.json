@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "VIGIL Matrix Lite",
+  "version": "0.9.0",
+  "description": "MV3-native request policy matrix: hostname hierarchy, wildcard rows, CSP/referrer/HTTPS switches, static blocklists, cookie stripping, default-deny and a text rules editor.",
+  "minimum_chrome_version": "121",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "VIGIL Matrix Lite",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/popup.html"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "sidePanel"
+  ],
+  "options_page": "src/options.html",
+  "incognito": "spanning",
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "blocklist",
+        "enabled": false,
+        "path": "data/static-blocklist.json"
+      }
+    ]
+  }
+}

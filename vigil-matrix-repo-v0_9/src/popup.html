@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VIGIL Matrix Lite</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>VIGIL Matrix Lite</h1>
+      <p id="site">Scanning current tab…</p>
+    </div>
+    <div>
+      <button id="openSidePanel" title="Open in side panel (stays open while you reload the page)">⧉</button>
+      <button id="refresh" title="Rescan page">↻</button>
+    </div>
+  </header>
+
+  <section id="summary" class="summary"></section>
+
+  <!-- v0.9: three scope levels — global "*", registrable domain, full hostname -->
+  <section class="scopebar">
+    <button id="scopeGlobal" class="scopeButton">Global (*)</button>
+    <button id="scopeDomain" class="scopeButton">Domain</button>
+    <button id="scopeHost" class="scopeButton" hidden>Host</button>
+    <button id="trustSite" hidden>Trust site (temp)</button>
+    <span id="scopeHint" class="muted"></span>
+  </section>
+
+  <!-- v0.9: per-scope switches (committed immediately, no draft layer) -->
+  <section id="switches" class="switches"></section>
+
+  <section class="legend">
+    <span><b class="cell block"></b> block</span>
+    <span><b class="cell allow"></b> allow</span>
+    <span><b class="cell noop"></b> noop</span>
+    <span><b class="cell block inherited"></b> inherited (less specific cell)</span>
+    <span><b class="cell noop dirty"></b> pending (unsaved)</span>
+    <span><b class="cell suggestBlock"></b> suggested tracker block</span>
+    <span><b class="cell suggestAllow"></b> suggested core</span>
+    <span><b class="cell noop unseen"></b> history/policy only</span>
+    <span class="muted">Header row = the "*" row · "All" column = all types · Cookie strips Cookie/Set-Cookie (block-only)</span>
+  </section>
+
+  <section class="toolbar primaryActions">
+    <button id="saveScope">Save</button>
+    <button id="revertScope">Revert</button>
+    <button id="clearScope">Clear working scope</button>
+  </section>
+
+  <section class="toolbar">
+    <button id="applySuggestedBlocks">Apply suggested blocks</button>
+    <button id="blockThirdPartyScripts">Block 3P scripts</button>
+    <button id="blockThirdPartyFrames">Block 3P frames</button>
+    <select id="policyPack" title="Apply a local policy pack to observed domains"></select>
+    <button id="applyPolicyPack">Apply pack</button>
+    <button id="showMatches">Show matched rules</button>
+  </section>
+
+  <main id="matrix"></main>
+  <section id="matches" class="matches" hidden></section>
+
+  <footer>
+    <button id="exportPolicy">Export</button>
+    <button id="openOptions">Options</button>
+  </footer>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
