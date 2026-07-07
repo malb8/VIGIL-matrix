@@ -4,6 +4,7 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+_metadata/
 
 # Node (no dependencies by design; guard against accidental installs)
 node_modules/

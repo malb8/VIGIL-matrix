@@ -34,8 +34,7 @@ uMatrix-style toggles, shown as chips above the matrix for the active scope:
 | Strip referrer | Removes the `Referer` header from requests in the scope. |
 | HTTPS upgrade | `upgradeScheme` on `http://` requests (site scope: the site's own navigations + everything it initiates). |
 
-Unlike matrix cells, switches have no draft layer: they commit the moment you
-flip them.
+Unlike matrix cells, switches have no draft layer: they commit the moment you flip them.
 
 ## Draft vs committed
 
