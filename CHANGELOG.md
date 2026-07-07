@@ -2,9 +2,6 @@
 
 ## 0.9.0 — 2026-07-07
 
-uMatrix feature parity round: points 1, 2, 4, 5, 6, 7 and 8 from the v0.8
-review ("wat kunnen we verder nog verbeteren dat uMatrix ook had").
-
 ### New capabilities
 - **Hostname hierarchy** (point 1): rows group per registrable domain with
   collapsible hostname sub-rows; cells may target a full hostname, which
