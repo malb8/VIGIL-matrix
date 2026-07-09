@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VIGIL Matrix Lite",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "MV3-native request policy matrix: hostname hierarchy, wildcard rows, CSP/referrer/HTTPS switches, static blocklists, cookie stripping, default-deny and a text rules editor.",
   "minimum_chrome_version": "121",
   "icons": {

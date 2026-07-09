@@ -28,15 +28,15 @@
 import {
   DYNAMIC_RULE_BASE_ID, DYNAMIC_RULE_MAX_ID,
   SESSION_RULE_BASE_ID, SESSION_RULE_MAX_ID,
-  MATRIX_TYPES, SWITCH_NAMES, GLOBAL_SCOPE,
-  compileCommittedRules, compileSessionRules,
+  MATRIX_TYPES, SWITCH_NAMES, GLOBAL_SCOPE, MAX_NESTING_DEPTH,
+  compileCommittedRules, compileSessionRules, findSpecificityConflicts,
   validateSitePolicies, validateTargetPolicy, validateMatrixType,
   validateAction, validateDomain, validateScope, validateSwitches,
   isEmptyTargetPolicy
 } from "./lib/dnrCompiler.js";
 import { toAsciiDomain, isValidAsciiDomain } from "./lib/domains.js";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7; // v0.10: real-depth scope/target specificity (no stored-data shape change)
 const draftStore = chrome.storage.session;
 
 const OBSERVED_MAX_SITES = 200;
@@ -211,6 +211,29 @@ async function getDraftSitePolicies() {
   return draftSitePolicies || {};
 }
 
+/*
+ * Refuses to persist a policy write that would leave two committed cells
+ * both beyond the specificity depth cap, in an ancestor/descendant
+ * relationship, disagreeing on action - the one case Chrome's own
+ * "highest priority wins" evaluator cannot resolve by specificity, so VIGIL
+ * must not let its equal-priority tiebreak decide silently. This gate lives
+ * at the write boundary (commit / import / rules-text apply), not inside the
+ * compiler: compileCommittedRules must stay non-throwing so a conflict
+ * already present in stored policy (e.g. from before this check existed)
+ * never blocks bootstrap from applying enforcement on browser startup.
+ */
+async function assertNoSpecificityConflicts({ sitePolicies, globalPolicy }) {
+  const suffixes = await loadSuffixes();
+  const conflicts = findSpecificityConflicts({ sitePolicies, globalPolicy, suffixes });
+  if (!conflicts.length) return;
+  const detail = conflicts
+    .map(({ a, b }) => `[${a.scope} → ${a.target} (${a.matrixType}): ${a.action}] vs [${b.scope} → ${b.target} (${b.matrixType}): ${b.action}]`)
+    .join("; ");
+  throw new Error(
+    `Cannot save: ${conflicts.length} nested hostname/target pair(s) are both more than ${MAX_NESTING_DEPTH} labels deep and disagree on action, so VIGIL cannot order them by specificity. Change one side to match the other. ${detail}`
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * Draft / commit / revert / clear
  *
@@ -252,9 +275,11 @@ async function commitSitePolicy(payload) {
   validateDomain(sourceDomain, "sourceDomain");
   validateTargetPolicy(sitePolicy || {});
 
-  const { sitePolicies = {} } = await chrome.storage.local.get(["sitePolicies"]);
+  const { sitePolicies = {}, globalPolicy = {} } = await chrome.storage.local.get(["sitePolicies", "globalPolicy"]);
   if (!sitePolicy || isEmptyTargetPolicy(sitePolicy)) delete sitePolicies[sourceDomain];
   else sitePolicies[sourceDomain] = sitePolicy;
+
+  await assertNoSpecificityConflicts({ sitePolicies, globalPolicy });
   await chrome.storage.local.set({ sitePolicies });
 
   const draftSitePolicies = await getDraftSitePolicies();
@@ -269,6 +294,10 @@ async function commitSitePolicy(payload) {
 async function commitGlobalPolicy(payload) {
   const { globalPolicy } = payload || {};
   validateTargetPolicy(globalPolicy || {});
+
+  const { sitePolicies = {} } = await chrome.storage.local.get(["sitePolicies"]);
+  await assertNoSpecificityConflicts({ sitePolicies, globalPolicy: globalPolicy || {} });
+
   await chrome.storage.local.set({ globalPolicy: globalPolicy || {} });
   await draftStore.set({ draftGlobalPolicy: null });
 
@@ -664,7 +693,7 @@ async function exportState() {
 async function importState(payload) {
   const imported = payload?.import;
   if (!imported || typeof imported !== "object") throw new Error("Missing import payload");
-  if (![1, 2, 3, 4, 5, 6].includes(imported.schemaVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7].includes(imported.schemaVersion)) {
     throw new Error(`Unsupported schemaVersion: ${imported.schemaVersion}`);
   }
 
@@ -682,6 +711,7 @@ async function importState(payload) {
   validateSitePolicies(sitePolicies);
   validateTargetPolicy(globalPolicy);
   validateSwitches(switches);
+  await assertNoSpecificityConflicts({ sitePolicies, globalPolicy });
 
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
   await chrome.storage.local.set({
@@ -714,6 +744,7 @@ async function applyRulesText(payload) {
   validateSitePolicies(sitePolicies);
   validateTargetPolicy(globalPolicy);
   validateSwitches(switches);
+  await assertNoSpecificityConflicts({ sitePolicies, globalPolicy });
 
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
   const next = { ...settings, schemaVersion: SCHEMA_VERSION };

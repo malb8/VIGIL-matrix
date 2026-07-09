@@ -15,14 +15,15 @@ import assert from "node:assert/strict";
 
 import { canonicalHost, registrableDomain, toAsciiDomain } from "../src/lib/domains.js";
 import {
-  PRIORITY, GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD,
+  PRIORITY, GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD, MAX_NESTING_DEPTH,
   compileCommittedRules,
   compileSessionRules,
   compactCells,
   collectCommittedCells,
+  findSpecificityConflicts,
   specsToRules,
   resolveOutcome,
-  matrixPriority, cookiePriority, scopeLevel, targetSpecificity,
+  matrixPriority, cookiePriority, scopeLevel, targetSpecificity, switchScopeTier,
   DYNAMIC_RULE_BASE_ID
 } from "../src/lib/dnrCompiler.js";
 import { parseRulesText, serializeRulesText, canonicalLines, diffRules } from "../src/lib/rulesText.js";
@@ -118,29 +119,64 @@ test("canonicalHost trims dots and lowercases", () => {
  * Coordinate math
  * ------------------------------------------------------------------ */
 
-test("scope level and target specificity", () => {
+// scopeLevel/targetSpecificity return 0="*", 1=apex, 2..(MAX_NESTING_DEPTH+1)
+// = real depth 1..MAX_NESTING_DEPTH below the registrable domain, capped.
+const DEPTH_CODE_MAX = MAX_NESTING_DEPTH + 1;
+
+// Builds a real ancestor/descendant chain: deepHost(n) always ends with
+// deepHost(n-1), so two calls at different depths are genuinely nested
+// (unlike e.g. distinct random labels, which would just be unrelated
+// siblings that happen to hash to the same depth bucket).
+function deepHost(labelsBelowApex, apex = "example.com") {
+  const labels = [];
+  for (let i = labelsBelowApex; i >= 1; i--) labels.push(`l${i}`);
+  return [...labels, ...apex.split(".")].join(".");
+}
+
+test("scope level and target specificity: real depth, capped at MAX_NESTING_DEPTH", () => {
   assert.equal(scopeLevel(GLOBAL_SCOPE, SUFFIXES), 0);
   assert.equal(scopeLevel("example.com", SUFFIXES), 1);
   assert.equal(scopeLevel("app.example.com", SUFFIXES), 2);
   assert.equal(targetSpecificity(TARGET_WILDCARD, SUFFIXES), 0);
   assert.equal(targetSpecificity("example.com", SUFFIXES), 1);
   assert.equal(targetSpecificity("cdn.example.com", SUFFIXES), 2);
-  assert.equal(targetSpecificity("a.b.cdn.example.com", SUFFIXES), 3); // capped
+
+  // Nesting resolves by real depth up to the cap: each extra label below the
+  // apex gets its own, strictly greater, specificity code.
+  for (let depth = 1; depth <= MAX_NESTING_DEPTH; depth++) {
+    assert.equal(scopeLevel(deepHost(depth), SUFFIXES), 1 + depth, `scope depth ${depth}`);
+    assert.equal(targetSpecificity(deepHost(depth), SUFFIXES), 1 + depth, `target depth ${depth}`);
+  }
+  // Beyond the cap, deeper hosts share the same (maximum) code - this is the
+  // residual case findSpecificityConflicts guards against.
+  assert.equal(scopeLevel(deepHost(MAX_NESTING_DEPTH + 1), SUFFIXES), DEPTH_CODE_MAX);
+  assert.equal(scopeLevel(deepHost(MAX_NESTING_DEPTH + 5), SUFFIXES), DEPTH_CODE_MAX);
+  assert.equal(targetSpecificity(deepHost(MAX_NESTING_DEPTH + 1), SUFFIXES), DEPTH_CODE_MAX);
+});
+
+test("switchScopeTier stays a cheap 3-level tier, independent of the widened scopeLevel", () => {
+  assert.equal(switchScopeTier(GLOBAL_SCOPE, SUFFIXES), 0);
+  assert.equal(switchScopeTier("example.com", SUFFIXES), 1);
+  assert.equal(switchScopeTier("app.example.com", SUFFIXES), 2);
+  assert.equal(switchScopeTier(deepHost(MAX_NESTING_DEPTH + 3), SUFFIXES), 2); // still 2, not capped-depth-max
 });
 
 test("priority ladder ordering invariants", () => {
+  const S_MAX = DEPTH_CODE_MAX, T_MAX = DEPTH_CODE_MAX;
+
   // Draft never outranks a more specific committed coordinate.
   const committedMoreSpecific = matrixPriority({ s: 0, t: 2, y: 1, layer: 0 });
   const draftLessSpecific = matrixPriority({ s: 0, t: 1, y: 1, layer: 1 });
   assert.ok(committedMoreSpecific > draftLessSpecific);
-  // Scope dominates target dominates type.
-  assert.ok(matrixPriority({ s: 1, t: 0, y: 0, layer: 0 }) > matrixPriority({ s: 0, t: 3, y: 1, layer: 1 }));
+  // Scope dominates target dominates type, at every depth up to the cap.
+  assert.ok(matrixPriority({ s: 1, t: 0, y: 0, layer: 0 }) > matrixPriority({ s: 0, t: T_MAX, y: 1, layer: 1 }));
   assert.ok(matrixPriority({ s: 0, t: 1, y: 0, layer: 0 }) > matrixPriority({ s: 0, t: 0, y: 1, layer: 1 }));
-  // Cookie band sits above every matrix priority (so allows cannot disable
-  // stripping) and below the switch bands.
-  assert.ok(cookiePriority({ s: 0, t: 0, layer: 0 }) > matrixPriority({ s: 2, t: 3, y: 1, layer: 1 }));
-  assert.ok(cookiePriority({ s: 2, t: 3, layer: 1 }) < PRIORITY.STRIP_REFERRER);
-  assert.ok(PRIORITY.MATRIX_OFF > PRIORITY.CSP_NO_WORKER + 2);
+  assert.ok(matrixPriority({ s: S_MAX, t: 0, y: 0, layer: 0 }) > matrixPriority({ s: S_MAX - 1, t: T_MAX, y: 1, layer: 1 }));
+  // Cookie band sits above every matrix priority - including the deepest,
+  // draft-layer matrix coordinate - so allows can never disable stripping.
+  assert.ok(cookiePriority({ s: 0, t: 0, layer: 0 }) > matrixPriority({ s: S_MAX, t: T_MAX, y: 1, layer: 1 }));
+  assert.ok(cookiePriority({ s: S_MAX, t: T_MAX, layer: 1 }) < PRIORITY.STRIP_REFERRER);
+  assert.ok(PRIORITY.MATRIX_OFF > PRIORITY.CSP_NO_WORKER + 2); // +2 = switchScopeTier's max bump
   assert.ok(PRIORITY.TRUST_SITE > PRIORITY.MATRIX_OFF);
   assert.ok(PRIORITY.STATIC_BLOCKLIST < PRIORITY.MATRIX_BASE);
 });
@@ -245,6 +281,124 @@ test("hostname scope overrides domain scope", () => {
   assert.equal(evaluate(rules, { domain: "cdn.example", type: "script", initiator: "www.example.com" }).outcome, "blocked");
 });
 
+test("D2 fix: nested hostname scopes resolve by real depth, not DNR's equal-priority tiebreak", () => {
+  // Before the fix, b.example.com and a.b.example.com both collapsed to
+  // scope level s=2 and emitted the identical priority; Chrome's tiebreak
+  // (allow wins) then decided regardless of which side was actually the
+  // deliberate, more specific rule. Verify both directions to prove this is
+  // real specificity ordering, not a directional bias.
+  const deeperBlocksShallowerAllows = compileCommittedRules({
+    globalPolicy: {},
+    sitePolicies: {
+      "b.example.com": { "tracker.example": { script: "allow" } },
+      "a.b.example.com": { "tracker.example": { script: "block" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(
+    evaluate(deeperBlocksShallowerAllows, { domain: "tracker.example", type: "script", initiator: "a.b.example.com" }).outcome,
+    "blocked"
+  );
+  // Elsewhere under b.example.com (but not under a.b.example.com), only the
+  // shallower scope matches.
+  assert.equal(
+    evaluate(deeperBlocksShallowerAllows, { domain: "tracker.example", type: "script", initiator: "c.b.example.com" }).outcome,
+    "allowed"
+  );
+
+  const deeperAllowsShallowerBlocks = compileCommittedRules({
+    globalPolicy: {},
+    sitePolicies: {
+      "b.example.com": { "tracker.example": { script: "block" } },
+      "a.b.example.com": { "tracker.example": { script: "allow" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(
+    evaluate(deeperAllowsShallowerBlocks, { domain: "tracker.example", type: "script", initiator: "a.b.example.com" }).outcome,
+    "allowed"
+  );
+  assert.equal(
+    evaluate(deeperAllowsShallowerBlocks, { domain: "tracker.example", type: "script", initiator: "c.b.example.com" }).outcome,
+    "blocked"
+  );
+});
+
+test("D2 fix: nested targets resolve by real depth, not DNR's equal-priority tiebreak", () => {
+  const rules = compileCommittedRules({
+    globalPolicy: {},
+    sitePolicies: {
+      "news.example": {
+        "y.cdn.example.com": { script: "allow" },
+        "x.y.cdn.example.com": { script: "block" }
+      }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(evaluate(rules, { domain: "x.y.cdn.example.com", type: "script", initiator: "news.example" }).outcome, "blocked");
+  assert.equal(evaluate(rules, { domain: "z.y.cdn.example.com", type: "script", initiator: "news.example" }).outcome, "allowed");
+});
+
+test("findSpecificityConflicts: flags disagreeing ancestor pairs beyond the depth cap, ignores everything else", () => {
+  // Both beyond MAX_NESTING_DEPTH, ancestor/descendant, disagreeing actions: flagged.
+  const beyondCap = findSpecificityConflicts({
+    globalPolicy: {},
+    sitePolicies: {
+      [deepHost(MAX_NESTING_DEPTH + 1)]: { "tracker.example": { script: "allow" } },
+      [deepHost(MAX_NESTING_DEPTH + 2)]: { "tracker.example": { script: "block" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(beyondCap.length, 1);
+  assert.equal(beyondCap[0].a.action !== beyondCap[0].b.action, true);
+
+  // Same depth bucket but NOT ancestor/descendant (unrelated siblings): a
+  // real request can never match both, so this must not be flagged.
+  const siblings = findSpecificityConflicts({
+    globalPolicy: {},
+    sitePolicies: {
+      [deepHost(MAX_NESTING_DEPTH + 1)]: { "tracker.example": { script: "allow" } },
+      [`other-${deepHost(MAX_NESTING_DEPTH + 1)}`]: { "tracker.example": { script: "block" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(siblings.length, 0);
+
+  // Beyond cap, ancestor/descendant, but SAME action: no ambiguity.
+  const agreeing = findSpecificityConflicts({
+    globalPolicy: {},
+    sitePolicies: {
+      [deepHost(MAX_NESTING_DEPTH + 1)]: { "tracker.example": { script: "block" } },
+      [deepHost(MAX_NESTING_DEPTH + 2)]: { "tracker.example": { script: "block" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(agreeing.length, 0);
+
+  // Beyond cap, ancestor/descendant, disagreeing, but disjoint concrete
+  // types: never compete for the same request, so no conflict.
+  const disjointTypes = findSpecificityConflicts({
+    globalPolicy: {},
+    sitePolicies: {
+      [deepHost(MAX_NESTING_DEPTH + 1)]: { "tracker.example": { script: "allow" } },
+      [deepHost(MAX_NESTING_DEPTH + 2)]: { "tracker.example": { image: "block" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(disjointTypes.length, 0);
+
+  // Within the cap: real depth still resolves it, no conflict.
+  const withinCap = findSpecificityConflicts({
+    globalPolicy: {},
+    sitePolicies: {
+      "b.example.com": { "tracker.example": { script: "allow" } },
+      "a.b.example.com": { "tracker.example": { script: "block" } }
+    },
+    suffixes: SUFFIXES
+  });
+  assert.equal(withinCap.length, 0);
+});
+
 test("specific type cell overrides the type-* (All) cell", () => {
   const rules = compileCommittedRules({
     globalPolicy: {},
@@ -331,6 +485,27 @@ test("cookie stripping survives site-level and draft allows", () => {
   assert.equal(viaDraft.cookiesStripped, true);
 });
 
+test("D5 regression: cookie band stays above an allow at the deepest matrix coordinate (draft layer, max depth)", () => {
+  const deepScope = deepHost(MAX_NESTING_DEPTH); // deepest real depth still resolved (not the capped residue)
+  const dynamic = compileCommittedRules({
+    globalPolicy: { "widget.example": { cookie: "block" } },
+    sitePolicies: {},
+    suffixes: SUFFIXES
+  });
+  const session = compileSessionRules({
+    committedSitePolicies: {},
+    committedGlobalPolicy: { "widget.example": { cookie: "block" } },
+    draftSitePolicies: { [deepScope]: { "widget.example": { script: "allow" } } },
+    draftGlobalPolicy: null,
+    trustedSites: [],
+    suffixes: SUFFIXES
+  });
+  const all = [...dynamic, ...session];
+  const outcome = evaluate(all, { domain: "widget.example", type: "script", initiator: deepScope });
+  assert.equal(outcome.outcome, "allowed");
+  assert.equal(outcome.cookiesStripped, true);
+});
+
 test("cookie cells only compile as block; allow is rejected", () => {
   assert.throws(() => compileCommittedRules({
     globalPolicy: { "x.example": { cookie: "allow" } },
@@ -370,6 +545,30 @@ test("draft site block overrides committed global allow before save", () => {
   const all = [...dynamic, ...session];
   assert.equal(evaluate(all, { domain: "cdn.example", type: "script", initiator: "news.example" }).outcome, "blocked");
   assert.equal(evaluate(all, { domain: "cdn.example", type: "script", initiator: "other.example" }).outcome, "allowed");
+});
+
+test("D3 regression: draft at a deep nested scope shadows its own committed cell but never outranks a deeper committed one", () => {
+  const shallow = deepHost(2); // within the cap
+  const deeper = deepHost(3);  // within the cap, strictly more specific than `shallow`
+
+  const committedSitePolicies = {
+    [shallow]: { "tracker.example": { script: "block" } },
+    [deeper]: { "tracker.example": { script: "block" } }
+  };
+  const dynamic = compileCommittedRules({ globalPolicy: {}, sitePolicies: committedSitePolicies, suffixes: SUFFIXES });
+  const session = compileSessionRules({
+    committedSitePolicies,
+    committedGlobalPolicy: {},
+    // Draft-allow only the shallower scope; the deeper committed block must still win there.
+    draftSitePolicies: { [shallow]: { "tracker.example": { script: "allow" } } },
+    draftGlobalPolicy: null,
+    trustedSites: [],
+    suffixes: SUFFIXES
+  });
+  const all = [...dynamic, ...session];
+  assert.equal(evaluate(all, { domain: "tracker.example", type: "script", initiator: deeper }).outcome, "blocked");
+  // A sibling of `shallow` (not under `deeper`) sees the draft allow.
+  assert.equal(evaluate(all, { domain: "tracker.example", type: "script", initiator: `other.${shallow}` }).outcome, "allowed");
 });
 
 test("draft noop neutralizes a committed global block before save", () => {

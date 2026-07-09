@@ -17,7 +17,7 @@
  */
 import { canonicalHost, registrableDomain as pslRegistrableDomain } from "./lib/domains.js";
 import {
-  GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD, SWITCH_NAMES,
+  GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD, SWITCH_NAMES, PRIORITY,
   resolveOutcome
 } from "./lib/dnrCompiler.js";
 
@@ -894,7 +894,7 @@ function renderMatch(match) {
   } else if (match.action === "upgradeScheme") {
     reason = `Upgraded an http:// request to https:// (${scope} https-upgrade switch).`;
   } else if (match.action === "allowAllRequests") {
-    reason = match.priority >= 310
+    reason = match.priority >= PRIORITY.TRUST_SITE
       ? `Trusted frame tree for ${target} (temporary trust).`
       : `Matrix off for ${target} (persistent kill switch).`;
   } else {

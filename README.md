@@ -13,7 +13,7 @@ Instead of intercepting requests with the (no longer blocking-capable)
 Everything runs locally: no backend, no telemetry, no remote code, no remote
 lists fetched at runtime.
 
-> **Status: experimental research preview (v0.9).**
+> **Status: experimental research preview (v0.10).**
 > Audience: advanced users, security architects, browser security researchers.
 > Goal: MV3-native, matrix-based, explainable request policy control.
 > Non-goals: full uMatrix compatibility, mass-market ad blocking, guaranteed

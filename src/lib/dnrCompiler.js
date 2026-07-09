@@ -1,21 +1,22 @@
 /*
- * VIGIL Matrix Lite - policy -> declarativeNetRequest compiler (v0.9)
+ * VIGIL Matrix Lite - policy -> declarativeNetRequest compiler (v0.10)
  *
  * Pure module: no chrome.* usage. The service worker feeds it policy objects
  * and applies the returned rule arrays; the node test suite exercises it
  * directly against a miniature DNR evaluator.
  *
- * v0.9 model
- * ----------
+ * v0.10 model
+ * -----------
  * A matrix cell is addressed by a COORDINATE with four dimensions:
  *
  *   scope level   s: 0 = global ("*")
  *                    1 = site scope equal to its registrable domain
- *                    2 = site scope that is a deeper hostname
+ *                    2..(MAX_NESTING_DEPTH+1) = site scope N labels below the
+ *                        registrable domain (real depth, capped)
  *   target spec   t: 0 = "*" (all hosts)
  *                    1 = registrable domain
- *                    2 = one label below the registrable domain
- *                    3 = two or more labels below (capped)
+ *                    2..(MAX_NESTING_DEPTH+1) = target N labels below the
+ *                        registrable domain (real depth, capped)
  *   type spec     y: 0 = "*" (all matrix types), 1 = a specific type
  *   layer          : 0 = committed (dynamic store), 1 = draft (session store)
  *
@@ -23,8 +24,18 @@
  * "highest priority wins" evaluation reproduces uMatrix's "most specific cell
  * wins" semantics, including drafts shadowing the committed layer:
  *
- *   matrix priority = 10 + s*16 + t*4 + y*2 + layer          (range 10..57)
- *   cookie priority = 80 + s*8  + t*2 + layer                (range 80..103)
+ *   matrix priority = 10  + s*32 + t*4 + y*2 + layer   (range 10..265)
+ *   cookie priority  = 300 + s*16 + t*2 + layer         (range 300..427)
+ *
+ * s and t encode REAL label depth below the registrable domain (not a fixed
+ * 3-level cap): nested hostname scopes/targets resolve by specificity via
+ * the priority number, the same way any other coordinate does. Depth is
+ * capped at MAX_NESTING_DEPTH (6) purely to bound the ladder's size - no
+ * legitimate hostname nests that deep. Two authored coordinates that both
+ * exceed the cap AND are in an ancestor/descendant relationship AND disagree
+ * on action are the one residual case the priority number cannot resolve;
+ * see findSpecificityConflicts(), which refuses to compile them silently
+ * rather than let Chrome's equal-priority tiebreak (allow wins) decide.
  *
  * Because the smallest step between two DIFFERENT coordinates is 2 and the
  * draft layer only adds 1, a draft rule always shadows its own committed cell
@@ -33,11 +44,17 @@
  * Cookie rules (modifyHeaders) sit above every allow priority on purpose:
  * Chrome suppresses a modifyHeaders rule whenever an allow rule of equal or
  * higher priority matches, so cookie stripping must outrank all allows.
+ * (Cookie cells only ever compile as "block" - see cellFor - so a cookie/
+ * cookie priority tie is harmless; the depth encoding is reused there only
+ * to keep one coordinate system instead of two.)
  *
  * Per-scope switches (uMatrix's blue puzzle toggles) compile to dedicated
  * rules above the matrix bands and are committed immediately (no draft
  * layer): strip-referrer, https-upgrade, no-inline-script (CSP),
- * no-worker (CSP) and matrix-off (persistent allowAllRequests).
+ * no-worker (CSP) and matrix-off (persistent allowAllRequests). Switches are
+ * independent per-scope toggles, not competing cells, so they deliberately
+ * keep the cheap global/apex/deeper 3-tier scope bump (switchScopeTier)
+ * rather than the widened depth-aware scopeLevel - see switchRules.
  */
 
 import { registrableDomain } from "./domains.js";
@@ -102,18 +119,29 @@ export const SWITCH_NAMES = [
   "https-upgrade"      // upgrade http:// requests to https://
 ];
 
+// Real label depth below the registrable domain that scope/target
+// specificity distinguishes before falling back to a shared "deepest" band.
+// No legitimate hostname nests this deep; see findSpecificityConflicts for
+// the (vanishingly rare) residual collision this cap can still produce.
+export const MAX_NESTING_DEPTH = 6;
+
+// scopeLevel/targetSpecificity each return 0..DEPTH_CODE_MAX (8 values: 0 for
+// "*"/global, 1 for the registrable domain itself, 2..7 for depth 1..6).
+const DEPTH_CODE_MAX = MAX_NESTING_DEPTH + 1;
+const DEPTH_CODE_RANGE = DEPTH_CODE_MAX + 1; // 8
+
 export const PRIORITY = {
   DEFAULT_DENY: 1,
   STATIC_BLOCKLIST: 5,     // used by tools/build-blocklist.mjs; any explicit
                            // allow cell (>= MATRIX_BASE) overrides the list
-  MATRIX_BASE: 10,         // + s*16 + t*4 + y*2 + layer   -> 10..57
-  COOKIE_BASE: 80,         // + s*8  + t*2 + layer         -> 80..103
-  STRIP_REFERRER: 150,     // + scope level                -> 150..152
-  HTTPS_UPGRADE: 160,      // + scope level
-  CSP_NO_INLINE: 170,      // + scope level
-  CSP_NO_WORKER: 174,      // + scope level
-  MATRIX_OFF: 300,         // committed allowAllRequests (kill switch)
-  TRUST_SITE: 310          // session allowAllRequests (temporary trust)
+  MATRIX_BASE: 10,         // + s*32 + t*4 + y*2 + layer   -> 10..265
+  COOKIE_BASE: 300,        // + s*16 + t*2 + layer         -> 300..427
+  STRIP_REFERRER: 450,     // + switchScopeTier (0..2)     -> 450..452
+  HTTPS_UPGRADE: 460,      // + switchScopeTier
+  CSP_NO_INLINE: 470,      // + switchScopeTier
+  CSP_NO_WORKER: 476,      // + switchScopeTier
+  MATRIX_OFF: 500,         // committed allowAllRequests (kill switch)
+  TRUST_SITE: 510          // session allowAllRequests (temporary trust)
 };
 
 // CSP value that blocks inline scripts while leaving external scripts to the
@@ -130,25 +158,50 @@ function labelCount(host) {
   return String(host || "").split(".").filter(Boolean).length;
 }
 
-/* 0 = global, 1 = registrable-domain scope, 2 = hostname scope. */
+/*
+ * 0 = global, 1 = registrable-domain scope, 2..DEPTH_CODE_MAX = real label
+ * depth below the registrable domain (1..MAX_NESTING_DEPTH), capped at
+ * DEPTH_CODE_MAX for anything deeper.
+ */
 export function scopeLevel(scope, suffixes) {
+  if (scope === GLOBAL_SCOPE) return 0;
+  const reg = registrableDomain(scope, suffixes);
+  if (scope === reg) return 1;
+  const depth = labelCount(scope) - labelCount(reg);
+  return 1 + Math.min(Math.max(depth, 1), MAX_NESTING_DEPTH);
+}
+
+/*
+ * 0 = "*", 1 = registrable domain, 2..DEPTH_CODE_MAX = real label depth
+ * below the registrable domain (1..MAX_NESTING_DEPTH), capped.
+ */
+export function targetSpecificity(target, suffixes) {
+  if (target === TARGET_WILDCARD) return 0;
+  const reg = registrableDomain(target, suffixes);
+  if (target === reg) return 1;
+  const depth = labelCount(target) - labelCount(reg);
+  return 1 + Math.min(Math.max(depth, 1), MAX_NESTING_DEPTH);
+}
+
+/*
+ * Switches are independent per-scope toggles (they modifyHeaders-append or
+ * gate their own condition, never compete against another scope's switch
+ * rule for the same coordinate), so they don't need - and must NOT use -
+ * the widened depth-aware scopeLevel above: reusing it would make a deeply
+ * nested switch scope's "+ s" bump collide with the next switch band's base.
+ * 0 = global, 1 = registrable-domain scope, 2 = any deeper hostname scope.
+ */
+export function switchScopeTier(scope, suffixes) {
   if (scope === GLOBAL_SCOPE) return 0;
   return scope === registrableDomain(scope, suffixes) ? 1 : 2;
 }
 
-/* 0 = "*", 1 = registrable domain, 2 = subdomain, 3 = deeper (capped). */
-export function targetSpecificity(target, suffixes) {
-  if (target === TARGET_WILDCARD) return 0;
-  const depth = labelCount(target) - labelCount(registrableDomain(target, suffixes));
-  return 1 + Math.min(Math.max(depth, 0), 2);
-}
-
 export function matrixPriority({ s, t, y, layer }) {
-  return PRIORITY.MATRIX_BASE + s * 16 + t * 4 + y * 2 + layer;
+  return PRIORITY.MATRIX_BASE + s * (DEPTH_CODE_RANGE * 4) + t * 4 + y * 2 + layer;
 }
 
 export function cookiePriority({ s, t, layer }) {
-  return PRIORITY.COOKIE_BASE + s * 8 + t * 2 + layer;
+  return PRIORITY.COOKIE_BASE + s * (DEPTH_CODE_RANGE * 2) + t * 2 + layer;
 }
 
 function cellPriority({ scope, target, matrixType, layer, suffixes }) {
@@ -320,6 +373,54 @@ export function collectCommittedCells({ sitePolicies, globalPolicy, suffixes }) 
     }
   }
   return cells;
+}
+
+/*
+ * Detects the one case the priority ladder cannot resolve by specificity:
+ * two committed cells whose scope AND target both hit the depth cap (so they
+ * emit the identical priority) AND are in a real ancestor/descendant
+ * relationship (so a single request's initiator/target chain can match both)
+ * AND disagree on action. Anything else - different depths within the cap,
+ * or same-priority cells that never actually compete (unrelated sibling
+ * hostnames, disjoint types) - is not a conflict and must not be flagged.
+ *
+ * Returns a list of { a, b } pairs (each a {scope,target,matrixType,action}
+ * coordinate) for the caller to reject before persisting/compiling. Cookie
+ * cells are excluded: they only ever compile as "block", so a tie there is
+ * never ambiguous.
+ */
+export function findSpecificityConflicts({ sitePolicies, globalPolicy, suffixes }) {
+  const cells = collectCommittedCells({ sitePolicies: sitePolicies || {}, globalPolicy: globalPolicy || {}, suffixes });
+
+  const byPriority = new Map();
+  for (const cell of cells) {
+    if (cell.kind === "cookie") continue;
+    if (!byPriority.has(cell.priority)) byPriority.set(cell.priority, []);
+    byPriority.get(cell.priority).push(cell);
+  }
+
+  const isSameOrAncestor = (x, y) => x === y || y.endsWith(`.${x}`) || x.endsWith(`.${y}`);
+  const typesOverlap = (a, b) => a === b || a === TYPE_WILDCARD || b === TYPE_WILDCARD;
+
+  const conflicts = [];
+  for (const group of byPriority.values()) {
+    if (group.length < 2) continue;
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i];
+        const b = group[j];
+        if (a.kind === b.kind) continue; // same action: no ambiguity to resolve
+        if (!typesOverlap(a.matrixType, b.matrixType)) continue;
+        if (!isSameOrAncestor(a.scope, b.scope)) continue;
+        if (!isSameOrAncestor(a.target, b.target)) continue;
+        conflicts.push({
+          a: { scope: a.scope, target: a.target, matrixType: a.matrixType, action: a.kind },
+          b: { scope: b.scope, target: b.target, matrixType: b.matrixType, action: b.kind }
+        });
+      }
+    }
+  }
+  return conflicts;
 }
 
 export function collectTargetPairs(...targetPolicies) {
@@ -540,7 +641,7 @@ export function switchRules(switches, suffixes, allocateId) {
   const rules = [];
 
   for (const [scope, flags] of Object.entries(switches || {})) {
-    const s = scopeLevel(scope, suffixes);
+    const s = switchScopeTier(scope, suffixes);
     const isGlobal = scope === GLOBAL_SCOPE;
     const forSite = (condition) => (isGlobal ? condition : { ...condition, initiatorDomains: [scope] });
 

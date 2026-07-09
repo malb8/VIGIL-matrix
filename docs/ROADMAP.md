@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: v0.9 (experimental research preview). Items are intentions, not
+Status: v0.10 (experimental research preview). Items are intentions, not
 promises; ordering reflects current priority.
 
 ## v1.0 — publication hardening

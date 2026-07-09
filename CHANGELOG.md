@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.10.0 — 2026-07-09
+
+### Fixes
+- **D2 fail-open**: nested hostname scopes/targets (e.g. `a.b.example.com`
+  under `b.example.com`) used to collapse to the same capped specificity
+  level and emit an identical DNR priority; Chrome's equal-priority tiebreak
+  (allow wins) then decided instead of depth, so a deliberate, more specific
+  block could be silently overridden by a shallower allow. `scopeLevel` and
+  `targetSpecificity` now encode real label depth below the registrable
+  domain (capped at `MAX_NESTING_DEPTH = 6` — deep enough that no legitimate
+  hostname reaches it), so nested cells resolve by actual specificity via the
+  priority number itself, the same way every other coordinate does.
+  Verified against real Chromium DNR (`getDynamicRules()`), not just the
+  mini evaluator: a shallow allow and a deeper block on the same target now
+  compile to strictly ordered priorities (80 vs 112) and the deeper rule
+  wins.
+
+### Model & internals
+- Priority ladder re-laid to fit the widened scope/target range: matrix
+  cells 10–265, cookie stripping 300–427, strip-referrer 450–452,
+  https-upgrade 460–462, CSP no-inline/no-worker 470–478, matrix-off 500,
+  trust-site 510. See ARCHITECTURE.md's "Priority ladder" section.
+- New `findSpecificityConflicts`: the one residual case depth can't order —
+  two committed cells that both exceed the depth cap, are in a real
+  ancestor/descendant relationship, and disagree on action — is now rejected
+  at the write boundary (`commitSitePolicy`, `commitGlobalPolicy`,
+  `importState`, `applyRulesText`) with a descriptive error, surfaced
+  through the existing popup/options error banner, rather than silently
+  resolved by Chrome's tiebreak. Verified end-to-end in a real browser: the
+  exact conflict message reaches the options page's status line and the
+  write never lands in `chrome.storage.local`.
+  The gate deliberately does **not** live inside `compileCommittedRules`
+  itself, since that also runs unconditionally on every browser startup —
+  a throwing compiler there would mean a conflict already present in stored
+  policy leaves a user with zero enforcement until they happen to re-save it.
+- Switches keep a separate, unwidened `switchScopeTier` (global / apex /
+  deeper) instead of the new depth-aware `scopeLevel`: they are independent
+  per-scope toggles, not competing cells, and reusing the widened function
+  would have collided CSP no-inline's scope bump with CSP no-worker's base.
+- `schemaVersion` 7: no stored-data shape change — marks that specificity
+  now resolves by real depth; schema-6 policy data recompiles under the new
+  rules with no migration needed. Imports accept schema 1–7.
+
+### Tests
+- Suite grown to 44 tests: nested-scope and nested-target precedence proven
+  in both directions (deeper block beats shallower allow, and vice versa) via
+  the mini DNR evaluator; `findSpecificityConflicts` behavior matrix (flags
+  genuine beyond-cap ancestor conflicts, correctly ignores same-depth
+  siblings, agreeing actions, and disjoint types); D3 (draft shadowing) and
+  D5 (cookie band above every allow) regressions re-verified at the new,
+  wider priority range.
+
+### Known limitations (unchanged or documented)
+- Removing a committed cookie block via a draft applies only after Save.
+- Two disagreeing, ancestor-related cells that both exceed
+  `MAX_NESTING_DEPTH` are rejected at save time rather than resolved
+  automatically — see "Specificity conflicts" in ARCHITECTURE.md. No real
+  hostname nests this deep in practice.
+- No live per-cell request counters under MV3.
+
 ## 0.9.0 — 2026-07-07
 
 ### New capabilities

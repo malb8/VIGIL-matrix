@@ -13,11 +13,18 @@ reconstructed from `getMatchedRules` (quota-limited) plus page scans.
 ## D2 — Priorities encode cell coordinates
 uMatrix's "most specific cell wins" is reproduced by encoding
 (scope level, target specificity, type specificity, draft layer) into the
-rule priority: `10 + s*16 + t*4 + y*2 + layer`. Chrome's own evaluator then
-*is* the precedence engine — no runtime resolution code that could disagree
-with enforcement.
-**Trade-off:** limited depth (3 scope levels, target specificity capped at
-3); nested hostname scopes at the same level fall back to DNR tie-breaking.
+rule priority: `10 + s*32 + t*4 + y*2 + layer`. Scope and target specificity
+encode real label depth below the registrable domain (capped at
+`MAX_NESTING_DEPTH = 6`), not a fixed 3-level cap, so nested hostname scopes
+and targets resolve by actual specificity rather than falling back to DNR's
+equal-priority tiebreak. Chrome's own evaluator stays the sole precedence
+engine — no runtime resolution code that could disagree with enforcement.
+**Trade-off:** depth is still bounded (6 labels below the registrable
+domain — deep enough that no legitimate hostname reaches it). Two disagreeing,
+ancestor-related cells that both exceed the cap are the one case the priority
+number can't order; `findSpecificityConflicts` refuses to save those rather
+than let DNR's tiebreak (allow wins) decide silently — see
+[ARCHITECTURE.md](ARCHITECTURE.md#specificity-conflicts-the-residual-case-depth-cant-order).
 
 ## D3 — Draft layer as +1 in the same ladder
 Drafts (session rules) sit exactly one priority above their committed

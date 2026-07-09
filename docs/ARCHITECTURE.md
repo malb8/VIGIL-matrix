@@ -23,21 +23,30 @@
 | dynamic | committed matrix cells, default-deny, switches, matrix-off | 100000–199999 |
 | session | draft cells, neutralizers, trust-site | 200000–299999 |
 
-## Priority ladder (the heart of v0.9)
+## Priority ladder (the heart of v0.10)
 
 A matrix cell has a **coordinate** (scope level `s`, target specificity `t`,
 type specificity `y`, layer). The coordinate is encoded in the rule priority so
 Chrome's "highest priority wins" reproduces "most specific cell wins":
 
 ```
-matrix priority = 10 + s*16 + t*4 + y*2 + layer        (10..57)
-cookie priority = 80 + s*8  + t*2 + layer              (80..103)
+matrix priority = 10  + s*32 + t*4 + y*2 + layer        (10..265)
+cookie priority  = 300 + s*16 + t*2 + layer              (300..427)
 
-s: 0 global "*"  | 1 registrable-domain scope | 2 hostname scope
-t: 0 target "*"  | 1 registrable domain | 2 subdomain | 3 deeper (capped)
-y: 0 type "*"    | 1 specific type
+s: 0 global "*" | 1 registrable-domain scope | 2..7 real depth 1..6 below the
+   registrable domain (capped at MAX_NESTING_DEPTH = 6)
+t: 0 target "*" | 1 registrable domain | 2..7 real depth 1..6 below the
+   registrable domain (same cap)
+y: 0 type "*"   | 1 specific type
 layer: 0 committed (dynamic) | 1 draft (session)
 ```
+
+`s` and `t` encode **real label depth**, not a fixed 3-level cap: a scope or
+target nested arbitrarily deep resolves by its own specificity, up to
+`MAX_NESTING_DEPTH` (6) labels below the registrable domain — deep enough that
+no legitimate hostname hits it. Switches don't use this widened `s`: they're
+independent per-scope toggles, not competing cells, so `switchScopeTier` keeps
+the cheap global/apex/deeper 3-tier bump instead (see below).
 
 The minimum gap between two *different* coordinates is 2 while the draft layer
 adds only 1, so a draft shadows its own committed cell but never outranks a
@@ -49,17 +58,41 @@ Fixed bands above and below:
 | --- | --- |
 | 1 | default-deny block-all (subresource types only) |
 | 5 | static blocklist (any allow cell ≥10 overrides it) |
-| 10–57 | matrix cells (see formula) |
-| 80–103 | cookie stripping (`modifyHeaders`) — above every allow so an allow can never suppress it |
-| 150–152 | strip-referrer (+ scope level) |
-| 160–162 | https-upgrade (`upgradeScheme`) |
-| 170–172 / 174–176 | CSP no-inline-script / no-worker (`modifyHeaders` append) |
-| 300 | matrix-off (`allowAllRequests`, dynamic, persistent) |
-| 310 | trust-site (`allowAllRequests`, session, temporary) |
+| 10–265 | matrix cells (see formula) |
+| 300–427 | cookie stripping (`modifyHeaders`) — above every allow so an allow can never suppress it |
+| 450–452 | strip-referrer (+ `switchScopeTier`, 0..2) |
+| 460–462 | https-upgrade (`upgradeScheme`) |
+| 470–472 / 476–478 | CSP no-inline-script / no-worker (`modifyHeaders` append) |
+| 500 | matrix-off (`allowAllRequests`, dynamic, persistent) |
+| 510 | trust-site (`allowAllRequests`, session, temporary) |
 
 `allowAllRequests` suppresses every lower-priority rule in the frame tree,
 including the `modifyHeaders` bands — which is exactly what a kill switch and
 temporary trust should do.
+
+### Specificity conflicts (the residual case depth can't order)
+
+Two committed cells can still tie if **both** their scope and target exceed
+`MAX_NESTING_DEPTH` (so both collapse into the same deepest band) **and** they
+are in a real ancestor/descendant relationship (so one request's
+initiator/target chain can match both) **and** they disagree on action.
+`findSpecificityConflicts` (`dnrCompiler.js`) detects exactly this — same
+depth-bucket collisions between unrelated sibling hostnames, or between cells
+of disjoint concrete types, are correctly *not* flagged, since a real request
+can never match both.
+
+This check runs at the **write boundary** — `commitSitePolicy`,
+`commitGlobalPolicy`, `importState` and `applyRulesText` in `background.js` —
+and rejects the write with a descriptive error (surfaced through the popup's
+existing error banner) rather than let Chrome's equal-priority tiebreak (allow
+wins) decide silently. It deliberately does **not** run inside
+`compileCommittedRules` itself: that function also runs unconditionally from
+`bootstrap()` on every browser startup, and a throwing compiler there would
+mean a conflict already present in stored policy (e.g. authored before this
+check existed) leaves the user with zero enforcement until they happen to
+re-save it — worse than the bug it fixes. Pre-existing conflicts keep
+resolving via Chrome's tiebreak, unchanged, until the next edit to one of the
+scopes involved.
 
 ## Compiler pipeline
 
@@ -136,16 +169,22 @@ breakdown for hostname rows; scans persist per site (200 sites, 80 targets,
 
 `schemaVersion 6`: adds `switches` (local) and `settings.blocklistEnabled`;
 site policy keys may now be hostnames and targets may be `*`/hostnames, types
-may be `*`. Imports accept schema 1–6; IDN keys are punycoded. Drafts live in
-`storage.session` (survive SW restarts, not browser restarts).
+may be `*`. `schemaVersion 7`: no stored-data shape change — marks that
+scope/target specificity now resolves by real depth (see "Priority ladder"
+above) rather than a fixed 3-level cap; existing schema-6 policy data
+recompiles under the new rules with no transform needed. Imports accept
+schema 1–7; IDN keys are punycoded. Drafts live in `storage.session` (survive
+SW restarts, not browser restarts).
 
 ## Known limitations
 
 - Cookie draft-removal applies only after Save (see above).
-- Two *nested hostname scopes* (e.g. `a.b.example.com` and `b.example.com`)
-  both map to scope level 2; if they ever disagree on the same coordinate, DNR
-  tie-breaking (allow wins) decides instead of depth. Same for targets deeper
-  than two labels below the registrable domain (spec capped at 3).
+- Nested hostname scopes/targets resolve by real depth up to
+  `MAX_NESTING_DEPTH` (6 labels below the registrable domain). Beyond that,
+  two disagreeing, ancestor-related cells are rejected at save time by
+  `findSpecificityConflicts` rather than silently resolved by DNR's
+  equal-priority tiebreak — see "Specificity conflicts" above. No real
+  hostname nests this deep in practice.
 - PSL-lite is a bundled subset, not the full Public Suffix List.
 - No live per-cell request counters: MV3 offers no unlimited match feedback
   (`onRuleMatchedDebug` is unpacked-only; `getMatchedRules` is quota-limited).
