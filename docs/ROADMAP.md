@@ -4,8 +4,16 @@ Status: v0.10 (experimental research preview). Items are intentions, not
 promises; ordering reflects current priority.
 
 ## v1.0 — publication hardening
-- Repository governance complete (this docs set), tagged releases,
-  reproducible release zip, CI running the node test suite.
+- Repository governance complete (this docs set) and CI running the node
+  test suite: done.
+- Reproducible release zip: done — `distro/vigil-matrix-store-v0_10.zip`
+  (manifest.json + src/ + data/ + icons/ only, no docs/tests/tools) is a
+  single package submittable to both the Chrome Web Store and Edge
+  Add-ons, since both accept the same MV3 unpacked-extension zip.
+  Rebuild the same way (stage manifest.json, src/, data/, icons/ at the
+  zip root, nothing else) for each future version.
+- Tagged releases: partial — `v0.9.0` is tagged; `v0.10.0` is not yet
+  (the D2 fail-open fix landed on `main` but hasn't been tagged).
 - Manual test pass across popular site categories (news, banking, SPA,
   video) in default and default-deny mode; fixups from that pass.
 - Accessibility pass on the popup (keyboard navigation of matrix cells,
@@ -29,10 +37,18 @@ promises; ordering reflects current priority.
   behavior matches known tracker patterns (local heuristics only).
 
 ## Store release track (parallel, unscheduled)
-- Chrome Web Store listing: privacy-policy URL (PRIVACY.md), permission
-  justifications (docs/PERMISSIONS.md), screenshots, single-purpose
-  statement. Feature-gate anything unpacked-only.
-- Edge Add-ons after CWS, given policy overlap.
+- Release package: done (see above). Permission justifications
+  (docs/PERMISSIONS.md) and screenshots/promo tiles
+  (`store-assets/`, gitignored — kept out of the public repo on purpose)
+  already exist locally.
+- Still open: create the actual Chrome Web Store and Edge Add-ons
+  developer-account listings, host PRIVACY.md at a public URL for the
+  listing's privacy-policy field, write the single-purpose statement, and
+  submit `vigil-matrix-store-v0_10.zip` to both. Feature-gate anything
+  unpacked-only (dev-mode live counters, once built) before submitting.
+- Edge Add-ons can be submitted in parallel with CWS now — the same
+  package works for both, so there's no dependency between the two
+  submissions beyond wanting consistent listing copy.
 
 ## Explicit non-goals
 - Full uMatrix compatibility (MV3 cannot express all of it).

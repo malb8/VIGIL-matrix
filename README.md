@@ -52,6 +52,8 @@ design and [CHANGELOG.md](CHANGELOG.md) for the version history.
 
 There is currently no store release; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
+Currently review pending for VIGIL-matrix in the Edge Add-Ons store
+
 ## Tests
 
 ```
