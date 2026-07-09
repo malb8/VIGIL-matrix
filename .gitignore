@@ -17,3 +17,6 @@ package-lock.json
 
 # Distribution artifacts
 distro/
+
+# Store listing assets (not for public repo)
+store-assets/
