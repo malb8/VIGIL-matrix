@@ -106,8 +106,6 @@
   hostname rows; the popup persists several hosts per (target, type).
 - Rule snapshots record touched header names so the matched-rules viewer can
   distinguish cookie stripping, referrer stripping and CSP injection.
-- Codebase audit: zero references to any AI assistant/vendor in the source
-  (verified by grep); developer comments expanded throughout the new modules.
 
 ### Tests
 - Suite grown to 38 tests; the mini DNR evaluator now models `upgradeScheme`,
