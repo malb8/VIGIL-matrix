@@ -16,8 +16,9 @@
  * - APPLY_RULES_TEXT replaces the committed policy from the parsed "My
  *   rules" text representation (parsing/diffing happens in the options page
  *   with src/lib/rulesText.js; this side only validates and applies).
- * - defaultDeny changes now also recompile SESSION rules: draft-noop
- *   neutralizers resolve to block under default-deny and allow otherwise.
+ * - defaultMode changes (v0.11: open / relaxed / hard, replacing the boolean
+ *   default-deny) recompile BOTH stores: the dynamic base rules and the
+ *   session draft-noop neutralizers, which resolve their fallback per mode.
  *
  * Carried over from v0.8: serialized operation queue (compile mutex),
  * timestamped rule snapshots for stable matched-rule attribution,
@@ -32,11 +33,11 @@ import {
   compileCommittedRules, compileSessionRules, findSpecificityConflicts,
   validateSitePolicies, validateTargetPolicy, validateMatrixType,
   validateAction, validateDomain, validateScope, validateSwitches,
-  isEmptyTargetPolicy
+  isEmptyTargetPolicy, DEFAULT_MODES, normalizeDefaultMode
 } from "./lib/dnrCompiler.js";
 import { toAsciiDomain, isValidAsciiDomain } from "./lib/domains.js";
 
-const SCHEMA_VERSION = 7; // v0.10: real-depth scope/target specificity (no stored-data shape change)
+const SCHEMA_VERSION = 8; // v0.11: settings.defaultMode ("open"|"relaxed"|"hard") replaces boolean defaultDeny
 const draftStore = chrome.storage.session;
 
 const OBSERVED_MAX_SITES = 200;
@@ -154,7 +155,7 @@ async function ensureDefaultState() {
   const defaults = {
     defaultCellState: "noop",
     normalizeToRegistrableDomain: "psl-lite",
-    defaultDeny: false,
+    defaultMode: "open",
     blocklistEnabled: false,
     schemaVersion: SCHEMA_VERSION
   };
@@ -162,7 +163,12 @@ async function ensureDefaultState() {
     await chrome.storage.local.set({ settings: defaults });
   } else if (local.settings.schemaVersion !== SCHEMA_VERSION) {
     // Forward migration is additive: unknown new keys get their defaults.
-    await chrome.storage.local.set({ settings: { ...defaults, ...local.settings, schemaVersion: SCHEMA_VERSION } });
+    // v0.11: boolean defaultDeny -> defaultMode ("hard" when it was true,
+    // "open" otherwise). Drop the legacy key so it can't drift.
+    const migrated = { ...defaults, ...local.settings, schemaVersion: SCHEMA_VERSION };
+    migrated.defaultMode = normalizeDefaultMode(local.settings);
+    delete migrated.defaultDeny;
+    await chrome.storage.local.set({ settings: migrated });
   }
 
   const draft = await draftStore.get(["draftSitePolicies", "draftGlobalPolicy", "trustedSites"]);
@@ -355,11 +361,13 @@ async function setSettings(payload) {
   const patch = payload?.settings || {};
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
   const next = { ...settings, ...patch, schemaVersion: SCHEMA_VERSION };
-  next.defaultDeny = Boolean(next.defaultDeny);
+  // Accept a new defaultMode, or a legacy defaultDeny boolean, and normalize.
+  next.defaultMode = normalizeDefaultMode(next);
+  delete next.defaultDeny;
   next.blocklistEnabled = Boolean(next.blocklistEnabled);
   await chrome.storage.local.set({ settings: next });
-  // defaultDeny changes both the dynamic rule set (deny-all base rule) AND
-  // the session rule set (draft-noop neutralizers resolve differently).
+  // defaultMode changes both the dynamic rule set (deny-all / relaxed base
+  // rules) AND the session rule set (draft-noop neutralizers resolve per mode).
   const dynamic = await compileAndApplyDynamicRules();
   const session = await compileAndApplySessionRules();
   return { ok: true, settings: next, dynamic, session };
@@ -505,7 +513,7 @@ async function compileAndApplyDynamicRules() {
     sitePolicies,
     globalPolicy,
     switches,
-    defaultDeny: Boolean(settings.defaultDeny),
+    defaultMode: settings.defaultMode,
     suffixes
   });
 
@@ -535,7 +543,7 @@ async function compileAndApplySessionRules() {
     draftSitePolicies: draftSitePolicies || {},
     draftGlobalPolicy,
     trustedSites,
-    defaultDeny: Boolean(settings.defaultDeny),
+    defaultMode: settings.defaultMode,
     suffixes
   });
 
@@ -693,7 +701,7 @@ async function exportState() {
 async function importState(payload) {
   const imported = payload?.import;
   if (!imported || typeof imported !== "object") throw new Error("Missing import payload");
-  if (![1, 2, 3, 4, 5, 6, 7].includes(imported.schemaVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8].includes(imported.schemaVersion)) {
     throw new Error(`Unsupported schemaVersion: ${imported.schemaVersion}`);
   }
 
@@ -714,18 +722,20 @@ async function importState(payload) {
   await assertNoSpecificityConflicts({ sitePolicies, globalPolicy });
 
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
-  await chrome.storage.local.set({
-    sitePolicies,
-    globalPolicy,
-    switches,
-    settings: {
-      ...settings,
-      ...(imported.settings || {}),
-      defaultDeny: Boolean(imported.settings?.defaultDeny ?? settings.defaultDeny ?? false),
-      blocklistEnabled: Boolean(imported.settings?.blocklistEnabled ?? settings.blocklistEnabled ?? false),
-      schemaVersion: SCHEMA_VERSION
-    }
+  const nextSettings = {
+    ...settings,
+    ...(imported.settings || {}),
+    blocklistEnabled: Boolean(imported.settings?.blocklistEnabled ?? settings.blocklistEnabled ?? false),
+    schemaVersion: SCHEMA_VERSION
+  };
+  // Accept both a new export (settings.defaultMode) and an old one
+  // (settings.defaultDeny), preferring whatever the import actually carried.
+  nextSettings.defaultMode = normalizeDefaultMode({
+    defaultMode: imported.settings?.defaultMode ?? settings.defaultMode,
+    defaultDeny: imported.settings?.defaultDeny
   });
+  delete nextSettings.defaultDeny;
+  await chrome.storage.local.set({ sitePolicies, globalPolicy, switches, settings: nextSettings });
   await draftStore.set({ draftSitePolicies: {}, draftGlobalPolicy: null });
 
   await applyBlocklistSetting();
@@ -748,8 +758,12 @@ async function applyRulesText(payload) {
 
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
   const next = { ...settings, schemaVersion: SCHEMA_VERSION };
-  if (typeof settingsPatch.defaultDeny === "boolean") next.defaultDeny = settingsPatch.defaultDeny;
+  // The rules-text parser emits settings.defaultMode (or, via the legacy
+  // `default-deny` alias, a boolean defaultDeny). Patch only keys the text set.
+  if (DEFAULT_MODES.includes(settingsPatch.defaultMode)) next.defaultMode = settingsPatch.defaultMode;
+  else if (typeof settingsPatch.defaultDeny === "boolean") next.defaultMode = settingsPatch.defaultDeny ? "hard" : "open";
   if (typeof settingsPatch.blocklistEnabled === "boolean") next.blocklistEnabled = settingsPatch.blocklistEnabled;
+  delete next.defaultDeny;
 
   await chrome.storage.local.set({ sitePolicies, globalPolicy, switches, settings: next });
   await draftStore.set({ draftSitePolicies: {}, draftGlobalPolicy: null });

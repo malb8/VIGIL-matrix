@@ -33,7 +33,10 @@ lists fetched at runtime.
 - **Draft vs committed**: cell clicks apply instantly as temporary session
   rules; Save persists, Revert discards. Draft previews use the same resolver
   the compiler uses, so what you see is what compiles.
-- **Default-deny mode**: block everything not explicitly allowed.
+- **Default modes**: *open* (block nothing by default), *relaxed* (block
+  third-party scripts, frames and XHR/fetch and strip third-party cookies, but
+  leave first-party and third-party images/CSS/fonts/media alone), or *hard*
+  (block everything not explicitly allowed).
 - **Static blocklists**: bundled DNR ruleset (off by default) plus a build
   tool for hosts-format lists; explicit allows always override the list.
 - **"My rules" text editor**: the whole policy as diffable plain text.

@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.11.0 — 2026-07-13
+
+### Features
+- **Three-way default mode** replaces the boolean default-deny.
+  `settings.defaultMode` is `open` (default — nothing blocked unless you say
+  so), `relaxed`, or `hard`:
+  - **relaxed** blocks only high-risk *third-party* subresources — scripts,
+    XHR/fetch/websocket/beacon, frames and plugin objects — using DNR's own
+    `domainType: thirdParty`, and strips third-party cookies (a `modifyHeaders`
+    rule at priority 299, below every authored cookie cell so your explicit
+    cookie rules stay authoritative). First-party requests and third-party
+    images/CSS/fonts/media keep loading; top navigation is never touched.
+  - **hard** is the former default-deny (block every subresource type).
+
+  Explicit allow cells (priority ≥ 10) override every mode, unchanged.
+- Options page now has an **Open / Relaxed / Hard** radio (was a default-deny
+  checkbox); the popup shows a one-line **Mode:** status above the matrix, and
+  unruled cells preview the mode's effect (a default block shows as inherited;
+  a default allow stays noop).
+- "My rules" text gains `setting: default-mode open|relaxed|hard`.
+  `setting: default-deny on|off` still parses as a legacy alias (`on` → hard,
+  `off` → open).
+
+### Security
+- **CSP hardening fix**: the `no-inline-script` switch no longer lists
+  `data:`/`blob:` in the injected `script-src`. Those schemes re-opened the
+  exact pseudo-inline injection the switch exists to close — an attacker with a
+  markup/attribute-injection primitive could run
+  `<script src="data:text/javascript,…">`, which CSP matches against the source
+  list rather than treating as inline, so it sailed through a policy that only
+  omits `'unsafe-inline'`. `CSP_NO_INLINE_VALUE` is now `script-src 'unsafe-eval' *`
+  — `*` covers network-scheme sources but, per CSP, not `data:`/`blob:`.
+
+### Model & internals
+- `resolveOutcome` and the draft neutralizers are mode-aware via a new
+  `defaultOutcomeFor` (hard → block; relaxed → block only for a third-party
+  high-risk type; open → allow), approximating first-vs-third-party by
+  registrable domain so the popup preview matches compiled behavior.
+- `schemaVersion` bumped to 8: `defaultDeny: true` migrates to
+  `defaultMode: "hard"`, `false`/absent to `"open"`; the legacy key is dropped
+  on load. Imports accept schema 1–8 and still read an old export's
+  `defaultDeny`.
+- New evaluator coverage in `test/compiler.test.mjs`: `domainType` matching,
+  relaxed block/allow/cookie behavior, per-mode neutralizer fallback,
+  rules-text round-trip incl. the legacy alias, and the CSP regression.
+
 ## 0.10.0 — 2026-07-09
 
 ### Fixes

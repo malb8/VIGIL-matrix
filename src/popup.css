@@ -50,6 +50,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   padding: 8px;
   margin-bottom: 8px;
 }
+.modeStatus { justify-content: flex-start; }
+.modeStatus:empty { display: none; }
 .legend { color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
 .scopebar { margin-bottom: 8px; flex-wrap: wrap; }
 .scopeButton.active { border-color: #7aa2f7; background: #202b43; }

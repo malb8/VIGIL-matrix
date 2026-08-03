@@ -18,16 +18,17 @@
  *       name   : matrix-off | no-inline-script | no-worker |
  *                strip-referrer | https-upgrade
  *
- *   setting: default-deny on|off
+ *   setting: default-mode open|relaxed|hard
+ *   setting: default-deny on|off      (legacy alias: on -> hard, off -> open)
  *   setting: blocklist on|off
  *
  * Examples:
  *   * doubleclick.net * block          # block everything from doubleclick
- *   news.example * script block        # default-deny scripts on news.example
+ *   news.example * script block        # block all scripts on news.example
  *   news.example cdn.example script allow
  *   news.example widget.example cookie block
  *   switch: no-inline-script bank.example on
- *   setting: default-deny on
+ *   setting: default-mode relaxed
  *
  * IDN input is punycoded automatically. "off" switch lines and "noop" cells
  * are simply absent from the canonical serialization.
@@ -35,7 +36,7 @@
 
 import { toAsciiDomain } from "./domains.js";
 import {
-  MATRIX_TYPES, SWITCH_NAMES,
+  MATRIX_TYPES, SWITCH_NAMES, DEFAULT_MODES,
   GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD,
   validateAction
 } from "./dnrCompiler.js";
@@ -105,10 +106,19 @@ export function parseRulesText(text) {
 
       if (tokens[0] === "setting:") {
         if (tokens.length !== 3) throw new Error("setting lines take exactly 2 arguments");
-        const on = parseOnOff(tokens[2], "setting value");
-        if (tokens[1] === "default-deny") settings.defaultDeny = on;
-        else if (tokens[1] === "blocklist") settings.blocklistEnabled = on;
-        else throw new Error(`unknown setting "${tokens[1]}"`);
+        const name = tokens[1];
+        const value = tokens[2];
+        if (name === "default-mode") {
+          if (!DEFAULT_MODES.includes(value)) throw new Error(`default-mode must be ${DEFAULT_MODES.join("|")}, got "${value}"`);
+          settings.defaultMode = value;
+        } else if (name === "default-deny") {
+          // Legacy alias: keep old exports parseable. on -> hard, off -> open.
+          settings.defaultMode = parseOnOff(value, "setting value") ? "hard" : "open";
+        } else if (name === "blocklist") {
+          settings.blocklistEnabled = parseOnOff(value, "setting value");
+        } else {
+          throw new Error(`unknown setting "${name}"`);
+        }
         return;
       }
 
@@ -168,7 +178,13 @@ function matrixLines(scope, targetPolicy) {
  */
 export function canonicalLines({ globalPolicy, sitePolicies, switches, settings }) {
   const lines = [];
-  if (settings?.defaultDeny) lines.push("setting: default-deny on");
+  // Accept both the new shape (settings.defaultMode) and legacy state carrying
+  // a boolean defaultDeny. "open" is the default, so it stays absent — mirroring
+  // how "off" switches and "noop" cells never appear in the canonical form.
+  const mode = DEFAULT_MODES.includes(settings?.defaultMode)
+    ? settings.defaultMode
+    : (settings?.defaultDeny ? "hard" : "open");
+  if (mode !== "open") lines.push(`setting: default-mode ${mode}`);
   if (settings?.blocklistEnabled) lines.push("setting: blocklist on");
   for (const [scope, flags] of Object.entries(switches || {})) {
     for (const [name, on] of Object.entries(flags || {})) {

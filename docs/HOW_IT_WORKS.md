@@ -74,7 +74,7 @@ into the persistent store (it now survives browser restarts). Don't?
 
 **5. Removing a rule live works too.** If you draft-remove a saved block,
 VIGIL emits a *neutralizer*: a temporary rule at the same coordinate whose
-action is whatever the less specific layers (or default-deny) would have
+action is whatever the less specific layers (or the default mode) would have
 done. More specific rules keep winning, and the preview you see in the
 popup is computed by the same resolver the compiler uses — what you see is
 what compiles. (One documented exception: removing a saved **cookie** block
@@ -105,6 +105,21 @@ The bands above the matrix are deliberate too: cookie-stripping rules
 re-enable its cookies. Switches (CSP injection, referrer stripping, HTTPS
 upgrade) sit higher still, and only the explicit kill switches
 (`matrix-off` at 300, temporary trust at 310) outrank everything.
+
+## Three default modes
+
+Everything above describes what happens to domains you have a rule for. The
+**default mode** (Options page) decides what happens to everything else — the
+request no matrix cell covers. **Open** (the default) blocks nothing: you opt
+in, cell by cell. **Relaxed** blocks the high-risk third-party subresources —
+scripts, frames, and XHR/fetch — and strips third-party cookies, while leaving
+first-party requests and third-party images, stylesheets, fonts and media
+alone; top-level navigation is never touched, so pages still load and mostly
+work. **Hard** is the uMatrix-style kill-everything default: every request type
+is blocked until you explicitly allow it. All three are just a rule at the very
+bottom of the priority ladder, so any allow cell you add overrides them — and
+relaxed leans on the browser's own first-vs-third-party classification, so
+VIGIL never has to see a request to know which side it's on.
 
 ## What each permission is doing in this story
 

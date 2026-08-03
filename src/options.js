@@ -11,8 +11,16 @@ import { parseRulesText, serializeRulesText, diffRules } from "./lib/rulesText.j
 
 const policy = document.getElementById("policy");
 const status = document.getElementById("status");
-const defaultDeny = document.getElementById("defaultDeny");
+const modeRadios = Array.from(document.querySelectorAll('input[name="defaultMode"]'));
 const blocklist = document.getElementById("blocklist");
+
+function selectedMode() {
+  return (modeRadios.find((r) => r.checked) || {}).value || "open";
+}
+function setModeRadio(mode) {
+  const value = ["open", "relaxed", "hard"].includes(mode) ? mode : "open";
+  for (const r of modeRadios) r.checked = (r.value === value);
+}
 const rulesText = document.getElementById("rulesText");
 const rulesErrors = document.getElementById("rulesErrors");
 const rulesDiffOut = document.getElementById("rulesDiffOut");
@@ -23,14 +31,14 @@ document.getElementById("clear").addEventListener("click", () => { policy.value 
 document.getElementById("rulesLoad").addEventListener("click", () => loadRulesText().catch(showError));
 document.getElementById("rulesDiff").addEventListener("click", () => previewDiff().catch(showError));
 document.getElementById("rulesApply").addEventListener("click", () => applyRulesText().catch(showError));
-defaultDeny.addEventListener("change", () => saveDefaultDeny().catch(showError));
+for (const r of modeRadios) r.addEventListener("change", () => saveDefaultMode().catch(showError));
 blocklist.addEventListener("change", () => saveBlocklist().catch(showError));
 
 init().catch(showError);
 
 async function init() {
   const state = await send({ type: "GET_STATE" });
-  defaultDeny.checked = Boolean(state.settings?.defaultDeny);
+  setModeRadio(state.settings?.defaultMode);
   blocklist.checked = Boolean(state.blocklistEnabled);
   await loadRulesText();
   await loadJson();
@@ -45,7 +53,7 @@ async function currentRulesState() {
     sitePolicies: state.sitePolicies || {},
     switches: state.switches || {},
     settings: {
-      defaultDeny: Boolean(state.settings?.defaultDeny),
+      defaultMode: state.settings?.defaultMode || "open",
       blocklistEnabled: Boolean(state.blocklistEnabled)
     }
   };
@@ -99,7 +107,7 @@ async function applyRulesText() {
     }
   });
   const state = await send({ type: "GET_STATE" });
-  defaultDeny.checked = Boolean(state.settings?.defaultDeny);
+  setModeRadio(state.settings?.defaultMode);
   blocklist.checked = Boolean(state.blocklistEnabled);
   rulesDiffOut.hidden = true;
   status.textContent = `Rules applied. ${result.dynamic.added} saved DNR rules and ${result.session.added} temporary DNR rules active.`;
@@ -126,11 +134,15 @@ async function applyJson() {
 
 /* ---------------- Settings ---------------- */
 
-async function saveDefaultDeny() {
-  const result = await send({ type: "SET_SETTINGS", payload: { settings: { defaultDeny: defaultDeny.checked } } });
-  status.textContent = defaultDeny.checked
-    ? `Default-deny enabled. ${result.dynamic.added} saved DNR rules active (includes the deny-all base rule).`
-    : `Default-deny disabled. ${result.dynamic.added} saved DNR rules active.`;
+async function saveDefaultMode() {
+  const mode = selectedMode();
+  const result = await send({ type: "SET_SETTINGS", payload: { settings: { defaultMode: mode } } });
+  const note = mode === "hard"
+    ? "block everything except explicit allows"
+    : mode === "relaxed"
+      ? "block third-party scripts/frames/XHR and strip third-party cookies"
+      : "nothing blocked by default";
+  status.textContent = `Default mode: ${mode} — ${note}. ${result.dynamic.added} saved DNR rules active.`;
 }
 
 async function saveBlocklist() {

@@ -344,6 +344,10 @@ function committedPolicyFor(target, resourceType) {
  * compiler's own resolver over the merged view (including the working
  * policy). Cookie cells are header rules and resolve separately.
  */
+function defaultModeOf() {
+  return state?.settings?.defaultMode || "open";
+}
+
 function effectiveOutcomeFor(target, resourceType) {
   if (resourceType === "cookie") return { action: null, coord: null };
   return resolveOutcome({
@@ -351,7 +355,8 @@ function effectiveOutcomeFor(target, resourceType) {
     target,
     matrixType: resourceType,
     policies: mergedPoliciesView(),
-    suffixes: suffixSet
+    suffixes: suffixSet,
+    defaultMode: defaultModeOf()
   });
 }
 
@@ -397,6 +402,7 @@ function render() {
   const committedPolicy = getCommittedPolicy();
   const groups = buildMatrixGroups();
   const domains = Array.from(groups.keys()).sort(domainSort);
+  const mode = defaultModeOf();
 
   const dirty = !deepEqual(workingPolicy, committedPolicy);
   const workingCells = countPolicyCells(workingPolicy);
@@ -420,11 +426,17 @@ function render() {
     <span>Scope <code>${escapeHtml(scopeKey)}</code>: <strong>${workingCells}</strong> working / <strong>${committedCells}</strong> saved</span>
     <span>Switches on page: <strong>${activeSwitchCountForPage()}</strong></span>
     ${state.blocklistEnabled ? `<span>blocklist ON</span>` : ""}
-    ${state.settings?.defaultDeny ? `<span class="warn">default-deny ON</span>` : ""}
+    ${mode !== "open" ? `<span class="warn">mode: ${escapeHtml(mode)}</span>` : ""}
     ${trusted ? `<span class="warn">site trusted (temp)</span>` : ""}
     ${quotaWarn ? `<span class="warn">rule quota ≥80%</span>` : ""}
     <span class="${dirty ? "pending" : "muted"}">${dirty ? "Unsaved changes" : "No pending changes"}</span>
   `;
+
+  $("modeStatus").textContent = mode === "relaxed"
+    ? "Mode: relaxed — 3P scripts/frames/XHR blocked, cookies stripped"
+    : mode === "hard"
+      ? "Mode: hard — everything blocked unless explicitly allowed"
+      : "Mode: open — nothing blocked by default";
 
   $("scopeGlobal").classList.toggle("active", scopeMode === "global");
   $("scopeDomain").classList.toggle("active", scopeMode === "domain");
@@ -614,7 +626,11 @@ function cellButton(target, resourceType, { observed, seen }) {
   let inheritedFrom = null;
   if (working === "noop" && resourceType !== "cookie") {
     const outcome = effectiveOutcomeFor(target, resourceType);
-    if (outcome.action) {
+    // Surface an inherited badge for an explicit less-specific cell (has a
+    // coord, any action) or for a default-mode block (no coord). A default
+    // *allow* — open mode, or a relaxed first-party/allowed type — just means
+    // "not blocked", so leave the cell as noop instead of painting it green.
+    if (outcome.action && (outcome.coord || outcome.action === "block")) {
       displayAction = outcome.action;
       inherited = true;
       inheritedFrom = outcome.coord;
@@ -649,6 +665,8 @@ function buildCellTitle({ target, resourceType, working, committed, inherited, i
   ];
   if (inherited && inheritedFrom) {
     lines.push(`inherited ${resourceTypeLabel(inheritedFrom.matrixType)} ${effectiveWord(inheritedFrom)} from scope ${inheritedFrom.scope}, target ${inheritedFrom.target}`);
+  } else if (inherited) {
+    lines.push(`blocked by default (${defaultModeOf()} mode) — no matrix cell applies`);
   }
   if (resourceType === TYPE_WILDCARD) {
     lines.push('"All" cell: governs every request type except top navigation; specific type cells override it.');
@@ -936,6 +954,7 @@ function setBusy(message) {
 function renderError(message) {
   $("site").textContent = "Not available";
   $("summary").innerHTML = "";
+  $("modeStatus").textContent = "";
   $("switches").innerHTML = "";
   $("matrix").innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
 }

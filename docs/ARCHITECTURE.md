@@ -10,7 +10,7 @@
 | `src/background.js` | Service worker: state, storage, message dispatch (serialized), compile-and-apply, snapshots, history, blocklist toggling. |
 | `src/pageScan.js` | Classic script injected into every frame; classifies observed resources per raw hostname. |
 | `src/popup.js` / `popup.html` / `popup.css` | Matrix UI: 3 scopes, hostname hierarchy, `*` header row, All column, switch chips, matched-rules viewer. |
-| `src/options.js` / `options.html` | Default-deny + blocklist toggles, My-rules editor with diff, JSON import/export. |
+| `src/options.js` / `options.html` | Default-mode radio (open/relaxed/hard) + blocklist toggle, My-rules editor with diff, JSON import/export. |
 | `tools/build-blocklist.mjs` | hosts-format → static DNR ruleset JSON. |
 | `data/static-blocklist.json` | Bundled static ruleset (disabled by default). |
 | `test/compiler.test.mjs` | Node test suite with a miniature DNR evaluator. |
@@ -20,7 +20,7 @@
 | Store | Contents | IDs |
 | --- | --- | --- |
 | static (`blocklist`) | bundled blocklist, toggled via `updateEnabledRulesets` | 1+ |
-| dynamic | committed matrix cells, default-deny, switches, matrix-off | 100000–199999 |
+| dynamic | committed matrix cells, default-mode base rules, switches, matrix-off | 100000–199999 |
 | session | draft cells, neutralizers, trust-site | 200000–299999 |
 
 ## Priority ladder (the heart of v0.10)
@@ -56,9 +56,10 @@ Fixed bands above and below:
 
 | Priority | Rule |
 | --- | --- |
-| 1 | default-deny block-all (subresource types only) |
+| 1 | default-mode base rule (see "Default modes"): **hard** blocks all subresource types; **relaxed** blocks only third-party high-risk actives via `domainType: thirdParty`; **open** emits nothing |
 | 5 | static blocklist (any allow cell ≥10 overrides it) |
 | 10–265 | matrix cells (see formula) |
+| 299 | relaxed-mode third-party cookie strip (`modifyHeaders`) — above every matrix allow (≤265) so an allow can't suppress it, below every authored cookie cell (≥300) so explicit cookie rules stay authoritative |
 | 300–427 | cookie stripping (`modifyHeaders`) — above every allow so an allow can never suppress it |
 | 450–452 | strip-referrer (+ `switchScopeTier`, 0..2) |
 | 460–462 | https-upgrade (`upgradeScheme`) |
@@ -69,6 +70,31 @@ Fixed bands above and below:
 `allowAllRequests` suppresses every lower-priority rule in the frame tree,
 including the `modifyHeaders` bands — which is exactly what a kill switch and
 temporary trust should do.
+
+### Default modes (open / relaxed / hard)
+
+`settings.defaultMode` decides what happens to a request no matrix cell covers.
+It replaces the old boolean default-deny (`defaultDeny: true` is still accepted
+as a legacy alias for `hard`, at every input boundary — settings patch, import,
+rules-text). All three modes sit at priority 1, so any explicit allow cell
+(≥ `MATRIX_BASE`) overrides them.
+
+| Mode | Priority-1 rule(s) | Effect |
+| --- | --- | --- |
+| `open` | none | Nothing blocked by default; you block explicitly. Behaves like pre-v0.11 with default-deny off. |
+| `relaxed` | `relaxedDenyRule` + `relaxedCookieStripRule` | Blocks only high-risk **third-party** subresources (`script`, `xmlhttprequest`/`websocket`/`ping`/`other`, `sub_frame`, `object`) via DNR's own `domainType: thirdParty`, and strips third-party cookies (priority 299). First-party requests and third-party images/CSS/fonts/media load. `main_frame` is never in either rule's `resourceTypes`, so top navigation is untouched. |
+| `hard` | `defaultDenyRule` | Blocks every subresource type (the former default-deny). |
+
+The mode is not just a compile-time base rule: `resolveOutcome` and the draft
+neutralizers are **mode-aware**. When no explicit cell applies, the fallback
+outcome is `defaultOutcomeFor`: `hard` → block; `relaxed` → block only when the
+matrix type is one relaxed governs (`script`/`xmlhttprequest`/`sub_frame`) **and**
+the target is third-party to the context scope (approximated by comparing
+registrable domains — the wildcard row and a global context count as
+third-party, the conservative side); `open` → allow. The popup preview keys off
+this too: a default-mode *block* shows as an inherited cell, a default *allow*
+stays `noop` (it isn't an authored allow), so what you see still matches what
+compiles.
 
 ### Specificity conflicts (the residual case depth can't order)
 
@@ -118,8 +144,8 @@ an edited scope:
   committed cell; identical values are skipped, the dynamic rule suffices);
 - draft **noop over a committed value** (a removal) → a **neutralizer** at the
   removed cell's coordinate whose action is whatever `resolveOutcome` finds in
-  the strictly less specific *merged* layers — falling back to block under
-  default-deny, allow otherwise. More specific cells keep winning because
+  the strictly less specific *merged* layers — falling back to the mode-aware
+  default (see "Default modes"). More specific cells keep winning because
   their coordinates carry higher priorities.
 
 Cookie cells cannot be neutralized (an allow above the cookie band would
@@ -172,9 +198,13 @@ site policy keys may now be hostnames and targets may be `*`/hostnames, types
 may be `*`. `schemaVersion 7`: no stored-data shape change — marks that
 scope/target specificity now resolves by real depth (see "Priority ladder"
 above) rather than a fixed 3-level cap; existing schema-6 policy data
-recompiles under the new rules with no transform needed. Imports accept
-schema 1–7; IDN keys are punycoded. Drafts live in `storage.session` (survive
-SW restarts, not browser restarts).
+recompiles under the new rules with no transform needed. `schemaVersion 8`
+(v0.11): `settings.defaultMode` (`"open"`/`"relaxed"`/`"hard"`) replaces the
+boolean `settings.defaultDeny` — on load, `defaultDeny: true` migrates to
+`"hard"` and `false`/absent to `"open"`, and the legacy key is dropped. Imports
+accept schema 1–8 and still read an old export's `defaultDeny`; IDN keys are
+punycoded. Drafts live in `storage.session` (survive SW restarts, not browser
+restarts).
 
 ## Known limitations
 

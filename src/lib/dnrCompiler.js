@@ -99,6 +99,16 @@ export const ALL_SUBRESOURCE_TYPES = [
 ];
 export const DEFAULT_DENY_TYPES = ALL_SUBRESOURCE_TYPES;
 
+// "relaxed" default mode blocks only the high-risk active subresource types,
+// and only third-party (via DNR's own domainType matching). Images, stylesheets,
+// fonts and media are left to load; main_frame is never touched.
+export const RELAXED_DENY_TYPES = [
+  "script", "xmlhttprequest", "websocket", "ping", "sub_frame", "object", "other"
+];
+
+// Valid default-mode values, most-open first.
+export const DEFAULT_MODES = ["open", "relaxed", "hard"];
+
 export const COOKIE_DNR_TYPES_GLOBAL = ["main_frame", ...ALL_SUBRESOURCE_TYPES];
 // Site-scoped cookie rules skip main_frame: top navigations carry the
 // *previous* page as initiator, which is not what a site policy means, and
@@ -145,9 +155,15 @@ export const PRIORITY = {
 };
 
 // CSP value that blocks inline scripts while leaving external scripts to the
-// matrix: every external source stays syntactically allowed, but the absence
-// of 'unsafe-inline' disables inline <script> blocks and inline handlers.
-export const CSP_NO_INLINE_VALUE = "script-src 'unsafe-eval' * blob: data:";
+// matrix: `*` keeps every network-scheme (http/https/ws) source syntactically
+// allowed, but the absence of 'unsafe-inline' disables inline <script> blocks
+// and inline handlers. `data:` and `blob:` are deliberately NOT listed: `*`
+// does not cover them per CSP, and allowing `data:`/`blob:` in script-src would
+// re-open the exact injection class this switch exists to close (an attacker
+// with a markup/attribute-injection primitive could run
+// `<script src="data:text/javascript,...">` — not "inline" in CSP terms, so it
+// would sail through). Keeping them out is the whole point of the hardening.
+export const CSP_NO_INLINE_VALUE = "script-src 'unsafe-eval' *";
 export const CSP_NO_WORKER_VALUE = "worker-src 'none'";
 
 /* ------------------------------------------------------------------ *
@@ -281,6 +297,55 @@ export function isEmptyTargetPolicy(targetPolicy) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Default mode (open / relaxed / hard)
+ *
+ * Replaces the old boolean default-deny. `open` blocks nothing by default;
+ * `hard` is the former default-deny (block every subresource type); `relaxed`
+ * blocks only high-risk third-party subresources and strips third-party
+ * cookies. `defaultDeny: true` is still accepted as a legacy alias for `hard`.
+ * ------------------------------------------------------------------ */
+
+export function normalizeDefaultMode({ defaultMode, defaultDeny } = {}) {
+  if (DEFAULT_MODES.includes(defaultMode)) return defaultMode;
+  return defaultDeny ? "hard" : "open";
+}
+
+// Matrix columns whose *representative* request type the relaxed rule blocks.
+// (The DNR rule also blocks `object`/`other`, but those have no clean matrix
+// column of their own; the media column as a whole stays allowed, matching the
+// UI copy "third-party images/CSS/fonts/media still load".)
+const RELAXED_BLOCKED_MATRIX_TYPES = new Set(["script", "xmlhttprequest", "sub_frame"]);
+
+/*
+ * A target is "third-party" relative to the context scope when their
+ * registrable domains differ. Approximation used by the mode fallback:
+ * - target "*" (the wildcard row) has no single host, so treat it as
+ *   third-party (the conservative, block-leaning side);
+ * - a global/empty context has no first-party anchor, so everything is
+ *   third-party there.
+ */
+function isThirdPartyTarget(contextHost, target, suffixes) {
+  if (target === TARGET_WILDCARD) return true;
+  if (!contextHost || contextHost === GLOBAL_SCOPE) return true;
+  return registrableDomain(target, suffixes) !== registrableDomain(contextHost, suffixes);
+}
+
+/*
+ * The action a (contextHost, target, matrixType) request lands on when NO
+ * explicit cell applies, given the default mode. Mirrors the compiled
+ * priority-1 rules so neutralizers and the popup preview agree with runtime.
+ */
+export function defaultOutcomeFor({ defaultMode, contextHost, target, matrixType, suffixes }) {
+  const mode = normalizeDefaultMode({ defaultMode });
+  if (mode === "hard") return "block";
+  if (mode === "relaxed") {
+    if (!RELAXED_BLOCKED_MATRIX_TYPES.has(matrixType)) return "allow";
+    return isThirdPartyTarget(contextHost, target, suffixes) ? "block" : "allow";
+  }
+  return "allow"; // open
+}
+
+/* ------------------------------------------------------------------ *
  * Outcome resolution (shared by session neutralizers and the popup UI)
  *
  * Given a request context (scope chain of the page host), a target host and
@@ -320,7 +385,7 @@ export function targetChainFor(target, suffixes) {
  * Returns { action, coord } for the winning cell, or
  * { action: null } when only the default applies.
  */
-export function resolveOutcome({ contextHost, target, matrixType, policies, suffixes, maxPriorityExclusive = Infinity }) {
+export function resolveOutcome({ contextHost, target, matrixType, policies, suffixes, maxPriorityExclusive = Infinity, defaultMode = null }) {
   if (matrixType === "cookie") return { action: null, coord: null }; // header rules are not chained
   let best = null;
   for (const scope of scopeChainFor(contextHost, suffixes)) {
@@ -338,7 +403,17 @@ export function resolveOutcome({ contextHost, target, matrixType, policies, suff
       }
     }
   }
-  return best ? { action: best.action, coord: best.coord } : { action: null, coord: null };
+  if (best) return { action: best.action, coord: best.coord };
+  // No explicit cell: fall back to the default mode when one is supplied. The
+  // fallback carries no coord (it isn't an authored cell) — callers that want
+  // to distinguish an authored allow from a default-allow key off `coord`.
+  if (defaultMode) {
+    return {
+      action: defaultOutcomeFor({ defaultMode, contextHost, target, matrixType, suffixes }),
+      coord: null
+    };
+  }
+  return { action: null, coord: null };
 }
 
 /* ------------------------------------------------------------------ *
@@ -459,7 +534,8 @@ export function collectTargetPairs(...targetPolicies) {
  * So draft cookie *blocks* apply immediately, while *removing* a committed
  * cookie block only takes effect after Save. This is surfaced in the UI.
  */
-export function collectDraftCells({ committedSitePolicies, committedGlobalPolicy, draftSitePolicies, draftGlobalPolicy, defaultDeny, suffixes }) {
+export function collectDraftCells({ committedSitePolicies, committedGlobalPolicy, draftSitePolicies, draftGlobalPolicy, defaultDeny, defaultMode, suffixes }) {
+  const mode = normalizeDefaultMode({ defaultMode, defaultDeny });
   const cells = [];
 
   // Merged view: what the world looks like with all drafts applied. Used by
@@ -498,16 +574,20 @@ export function collectDraftCells({ committedSitePolicies, committedGlobalPolicy
         if (draftAction === committedAction) continue; // no-op: dynamic rule already does this
         action = draftAction;
       } else if (committedAction !== "noop") {
-        // Neutralizer: resolve what applies below the removed cell.
+        // Neutralizer: resolve what applies below the removed cell, falling
+        // back to the default mode (block under hard; block only for a
+        // third-party high-risk type under relaxed; allow under open) when no
+        // less specific cell applies.
         const below = resolveOutcome({
           contextHost: scope,
           target,
           matrixType,
           policies: mergedView,
           suffixes,
-          maxPriorityExclusive: cellPriority({ scope, target, matrixType, layer: 0, suffixes })
+          maxPriorityExclusive: cellPriority({ scope, target, matrixType, layer: 0, suffixes }),
+          defaultMode: mode
         });
-        action = below.action || (defaultDeny ? "block" : "allow");
+        action = below.action;
       }
       if (!action) continue;
       cells.push(cellFor({ scope, target, matrixType, action, layer: 1, suffixes }));
@@ -628,6 +708,51 @@ export function defaultDenyRule(id) {
     condition: {
       urlFilter: "*",
       resourceTypes: DEFAULT_DENY_TYPES
+    }
+  };
+}
+
+/*
+ * "relaxed" mode: block only high-risk third-party subresources. DNR's own
+ * `domainType: "thirdParty"` decides first-vs-third-party per request (by
+ * registrable domain), so first-party actives and all third-party
+ * images/CSS/fonts/media keep loading. main_frame is excluded (never in
+ * RELAXED_DENY_TYPES) so top navigation is never blocked. Sits at priority 1,
+ * so any explicit allow cell (>= MATRIX_BASE) overrides it, exactly like the
+ * hard-mode deny.
+ */
+export function relaxedDenyRule(id) {
+  return {
+    id,
+    priority: PRIORITY.DEFAULT_DENY,
+    action: { type: "block" },
+    condition: {
+      domainType: "thirdParty",
+      resourceTypes: RELAXED_DENY_TYPES
+    }
+  };
+}
+
+/*
+ * "relaxed" mode also strips cookies from third-party subresources. Priority
+ * sits one below COOKIE_BASE: still above every matrix allow (<= 265) so an
+ * allow can't suppress it, but below every authored cookie cell (>= 300) so
+ * the user's explicit cookie rules stay authoritative. main_frame is excluded
+ * (same reasoning as site-scoped cookie cells: don't strip first-party
+ * navigation cookies).
+ */
+export function relaxedCookieStripRule(id) {
+  return {
+    id,
+    priority: PRIORITY.COOKIE_BASE - 1,
+    action: {
+      type: "modifyHeaders",
+      requestHeaders: [{ header: "cookie", operation: "remove" }],
+      responseHeaders: [{ header: "set-cookie", operation: "remove" }]
+    },
+    condition: {
+      domainType: "thirdParty",
+      resourceTypes: ALL_SUBRESOURCE_TYPES
     }
   };
 }
@@ -768,17 +893,23 @@ function idAllocator(baseId, maxId, label) {
  * Top-level compile entry points
  * ------------------------------------------------------------------ */
 
-export function compileCommittedRules({ sitePolicies, globalPolicy, switches, defaultDeny = false, suffixes }) {
+export function compileCommittedRules({ sitePolicies, globalPolicy, switches, defaultDeny = false, defaultMode, suffixes }) {
   validateSitePolicies(sitePolicies || {});
   validateTargetPolicy(globalPolicy || {});
   validateSwitches(switches || {});
 
+  const mode = normalizeDefaultMode({ defaultMode, defaultDeny });
   const cells = collectCommittedCells({ sitePolicies: sitePolicies || {}, globalPolicy: globalPolicy || {}, suffixes });
   const specs = compactCells(cells);
 
   const allocate = idAllocator(DYNAMIC_RULE_BASE_ID, DYNAMIC_RULE_MAX_ID, "Dynamic");
   const rules = [];
-  if (defaultDeny) rules.push(defaultDenyRule(allocate()));
+  if (mode === "hard") {
+    rules.push(defaultDenyRule(allocate()));
+  } else if (mode === "relaxed") {
+    rules.push(relaxedDenyRule(allocate()));
+    rules.push(relaxedCookieStripRule(allocate()));
+  }
   for (const spec of specs) rules.push(specToRule(spec, allocate()));
   rules.push(...switchRules(switches || {}, suffixes, allocate));
   return rules;
@@ -787,7 +918,7 @@ export function compileCommittedRules({ sitePolicies, globalPolicy, switches, de
 export function compileSessionRules({
   committedSitePolicies, committedGlobalPolicy,
   draftSitePolicies, draftGlobalPolicy,
-  trustedSites, defaultDeny = false, suffixes
+  trustedSites, defaultDeny = false, defaultMode, suffixes
 }) {
   validateSitePolicies(committedSitePolicies || {});
   validateTargetPolicy(committedGlobalPolicy || {});
@@ -800,6 +931,7 @@ export function compileSessionRules({
     draftSitePolicies: draftSitePolicies || {},
     draftGlobalPolicy: draftGlobalPolicy === undefined ? null : draftGlobalPolicy,
     defaultDeny,
+    defaultMode,
     suffixes
   });
   const specs = compactCells(cells);

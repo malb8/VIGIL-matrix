@@ -24,6 +24,7 @@ import {
   specsToRules,
   resolveOutcome,
   matrixPriority, cookiePriority, scopeLevel, targetSpecificity, switchScopeTier,
+  normalizeDefaultMode, defaultOutcomeFor, CSP_NO_INLINE_VALUE,
   DYNAMIC_RULE_BASE_ID
 } from "../src/lib/dnrCompiler.js";
 import { parseRulesText, serializeRulesText, canonicalLines, diffRules } from "../src/lib/rulesText.js";
@@ -47,6 +48,12 @@ function ruleMatches(rule, req) {
   if (!domainMatches(c.requestDomains, req.domain)) return false;
   if (c.resourceTypes && !c.resourceTypes.includes(req.type)) return false;
   if (c.initiatorDomains && !domainMatches(c.initiatorDomains, req.initiator)) return false;
+  if (c.domainType) {
+    // thirdParty = request's registrable domain differs from the document's.
+    const isThird = registrableDomain(req.domain, SUFFIXES) !== registrableDomain(req.initiator || "", SUFFIXES);
+    if (c.domainType === "thirdParty" && !isThird) return false;
+    if (c.domainType === "firstParty" && isThird) return false;
+  }
   return true;
 }
 
@@ -459,6 +466,127 @@ test("default-deny blocks unknowns, user allows punch through", () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Default mode (open / relaxed / hard)
+ * ------------------------------------------------------------------ */
+
+test("normalizeDefaultMode: values, legacy alias, fallback", () => {
+  assert.equal(normalizeDefaultMode({ defaultMode: "relaxed" }), "relaxed");
+  assert.equal(normalizeDefaultMode({ defaultMode: "hard" }), "hard");
+  assert.equal(normalizeDefaultMode({ defaultMode: "open" }), "open");
+  assert.equal(normalizeDefaultMode({ defaultDeny: true }), "hard");   // legacy alias
+  assert.equal(normalizeDefaultMode({ defaultDeny: false }), "open");
+  assert.equal(normalizeDefaultMode({ defaultMode: "bogus" }), "open"); // unknown -> open
+  assert.equal(normalizeDefaultMode({}), "open");
+});
+
+test("defaultOutcomeFor mirrors the compiled priority-1 rules", () => {
+  // hard: everything blocks
+  assert.equal(defaultOutcomeFor({ defaultMode: "hard", contextHost: "news.example", target: "img.example", matrixType: "image", suffixes: SUFFIXES }), "block");
+  // open: everything allows
+  assert.equal(defaultOutcomeFor({ defaultMode: "open", contextHost: "news.example", target: "tracker.com", matrixType: "script", suffixes: SUFFIXES }), "allow");
+  // relaxed: 3P high-risk actives block; 1P and non-active types allow
+  assert.equal(defaultOutcomeFor({ defaultMode: "relaxed", contextHost: "news.example", target: "tracker.com", matrixType: "script", suffixes: SUFFIXES }), "block");
+  assert.equal(defaultOutcomeFor({ defaultMode: "relaxed", contextHost: "news.example", target: "cdn.news.example", matrixType: "script", suffixes: SUFFIXES }), "allow"); // first-party
+  assert.equal(defaultOutcomeFor({ defaultMode: "relaxed", contextHost: "news.example", target: "tracker.com", matrixType: "image", suffixes: SUFFIXES }), "allow");  // non-active
+});
+
+test("relaxed mode: blocks third-party high-risk actives, leaves the rest", () => {
+  const rules = compileCommittedRules({ defaultMode: "relaxed", globalPolicy: {}, sitePolicies: {}, suffixes: SUFFIXES });
+  // third-party script / frame / xhr blocked
+  for (const type of ["script", "sub_frame", "xmlhttprequest"]) {
+    assert.equal(evaluate(rules, { domain: "tracker.com", type, initiator: "news.example" }).outcome, "blocked", type);
+  }
+  // third-party images / css / fonts / media still load
+  for (const type of ["image", "stylesheet", "font", "media"]) {
+    assert.equal(evaluate(rules, { domain: "tracker.com", type, initiator: "news.example" }).outcome, "default", type);
+  }
+  // first-party actives load
+  assert.equal(evaluate(rules, { domain: "cdn.news.example", type: "script", initiator: "news.example" }).outcome, "default");
+  // main_frame navigation is never touched
+  assert.equal(evaluate(rules, { domain: "news.example", type: "main_frame", initiator: "" }).outcome, "default");
+});
+
+test("relaxed mode: an explicit allow cell overrides the third-party block", () => {
+  const rules = compileCommittedRules({
+    defaultMode: "relaxed",
+    globalPolicy: {},
+    sitePolicies: { "news.example": { "tracker.com": { script: "allow" } } },
+    suffixes: SUFFIXES
+  });
+  assert.equal(evaluate(rules, { domain: "tracker.com", type: "script", initiator: "news.example" }).outcome, "allowed");
+  // elsewhere the relaxed default still blocks it
+  assert.equal(evaluate(rules, { domain: "tracker.com", type: "script", initiator: "other.example" }).outcome, "blocked");
+});
+
+test("relaxed mode: strips third-party cookies, above every matrix allow, below authored cookie cells", () => {
+  const rules = compileCommittedRules({
+    defaultMode: "relaxed",
+    globalPolicy: {},
+    sitePolicies: { "news.example": { "widget.com": { script: "allow" } } },
+    suffixes: SUFFIXES
+  });
+  // a third-party image loads but still has its cookies stripped
+  const img = evaluate(rules, { domain: "widget.com", type: "image", initiator: "news.example" });
+  assert.equal(img.outcome, "default");
+  assert.equal(img.cookiesStripped, true);
+  // an explicitly-allowed third-party script is allowed AND cookie-stripped
+  const script = evaluate(rules, { domain: "widget.com", type: "script", initiator: "news.example" });
+  assert.equal(script.outcome, "allowed");
+  assert.equal(script.cookiesStripped, true);
+  // first-party requests keep their cookies
+  const firstParty = evaluate(rules, { domain: "cdn.news.example", type: "image", initiator: "news.example" });
+  assert.equal(firstParty.cookiesStripped, false);
+});
+
+test("neutralizer fallback is mode-aware", () => {
+  const committedGlobalPolicy = { "tracker.com": { script: "block" } };
+  const removeGlobalBlock = (defaultMode) => {
+    const dynamic = compileCommittedRules({ defaultMode, globalPolicy: committedGlobalPolicy, sitePolicies: {}, suffixes: SUFFIXES });
+    const session = compileSessionRules({
+      committedSitePolicies: {}, committedGlobalPolicy,
+      draftSitePolicies: {}, draftGlobalPolicy: {}, // removed the block in the draft
+      trustedSites: [], defaultMode, suffixes: SUFFIXES
+    });
+    return [...dynamic, ...session];
+  };
+  const req = { domain: "tracker.com", type: "script", initiator: "news.example" };
+  assert.equal(evaluate(removeGlobalBlock("open"), req).outcome, "allowed");    // open -> allow
+  assert.equal(evaluate(removeGlobalBlock("hard"), req).outcome, "blocked");    // hard -> block
+  assert.equal(evaluate(removeGlobalBlock("relaxed"), req).outcome, "blocked"); // relaxed, 3P active -> block
+
+  // relaxed: removing a block on a first-party active reveals allow, not block.
+  const committed = { "news.example": { "cdn.news.example": { script: "block" } } };
+  const dynamic = compileCommittedRules({ defaultMode: "relaxed", globalPolicy: {}, sitePolicies: committed, suffixes: SUFFIXES });
+  const session = compileSessionRules({
+    committedSitePolicies: committed, committedGlobalPolicy: {},
+    draftSitePolicies: { "news.example": {} }, draftGlobalPolicy: null,
+    trustedSites: [], defaultMode: "relaxed", suffixes: SUFFIXES
+  });
+  assert.equal(
+    evaluate([...dynamic, ...session], { domain: "cdn.news.example", type: "script", initiator: "news.example" }).outcome,
+    "allowed"
+  );
+});
+
+test("no-inline-script CSP does not allow data:/blob: script sources", () => {
+  // Regression for the CSP bypass: `data:`/`blob:` in script-src re-open the
+  // pseudo-inline injection the switch exists to close.
+  assert.ok(!/\bdata:/.test(CSP_NO_INLINE_VALUE), CSP_NO_INLINE_VALUE);
+  assert.ok(!/\bblob:/.test(CSP_NO_INLINE_VALUE), CSP_NO_INLINE_VALUE);
+  const rules = compileCommittedRules({
+    globalPolicy: {}, sitePolicies: {},
+    switches: { "bank.example": { "no-inline-script": true } },
+    suffixes: SUFFIXES
+  });
+  const page = evaluate(rules, { domain: "bank.example", type: "main_frame", initiator: "" });
+  const csp = page.headerRules
+    .flatMap((r) => (r.action.responseHeaders || []).map((h) => h.value))
+    .find((v) => v.startsWith("script-src"));
+  assert.ok(csp, "a script-src CSP header is injected");
+  assert.ok(!/\bdata:/.test(csp) && !/\bblob:/.test(csp), csp);
+});
+
+/* ------------------------------------------------------------------ *
  * Cookie column
  * ------------------------------------------------------------------ */
 
@@ -792,7 +920,7 @@ test("rules text: parse, aliases, switches, settings and errors", () => {
   assert.equal(parsed.sitePolicies["news.example"]["widget.example"].cookie, "block");
   assert.equal(parsed.switches["bank.example"]["no-inline-script"], true);
   assert.equal(parsed.switches["dev.example"]["matrix-off"], true);
-  assert.equal(parsed.settings.defaultDeny, true);
+  assert.equal(parsed.settings.defaultMode, "hard"); // legacy `default-deny on` alias
   assert.equal(parsed.errors.length, 2);
   assert.equal(parsed.errors[0].line, 8);
   assert.equal(parsed.errors[1].line, 9);
@@ -818,6 +946,28 @@ test("rules text: serialize -> parse round-trips to identical canonical lines", 
   const parsed = parseRulesText(text);
   assert.equal(parsed.errors.length, 0);
   assert.deepEqual(canonicalLines(parsed), canonicalLines(state));
+});
+
+test("rules text: default-mode round-trips; legacy default-deny is an alias", () => {
+  // New form parses and serializes back.
+  const relaxed = parseRulesText("setting: default-mode relaxed");
+  assert.equal(relaxed.errors.length, 0);
+  assert.equal(relaxed.settings.defaultMode, "relaxed");
+  const round = parseRulesText(serializeRulesText({
+    globalPolicy: {}, sitePolicies: {}, switches: {}, settings: { defaultMode: "relaxed" }
+  }));
+  assert.equal(round.settings.defaultMode, "relaxed");
+
+  // "open" is the default, so it is absent from the canonical form.
+  assert.ok(!canonicalLines({ globalPolicy: {}, sitePolicies: {}, switches: {}, settings: { defaultMode: "open" } })
+    .some((l) => l.startsWith("setting: default-mode")));
+
+  // Legacy alias: default-deny on/off -> hard/open.
+  assert.equal(parseRulesText("setting: default-deny on").settings.defaultMode, "hard");
+  assert.equal(parseRulesText("setting: default-deny off").settings.defaultMode, "open");
+
+  // Invalid value is a parse error.
+  assert.equal(parseRulesText("setting: default-mode strict").errors.length, 1);
 });
 
 test("rules text: diff reports added and removed lines", () => {

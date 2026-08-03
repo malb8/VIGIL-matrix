@@ -12,6 +12,8 @@
     .warn { color: #d3a533; }
     .status { margin-top: 12px; }
     .setting { background: #181b22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 12px; margin: 16px 0; }
+    .setting .settingHead { margin-top: 0; }
+    .setting label { margin: 6px 0; align-items: flex-start; }
     label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
     .diff { background: #181b22; border: 1px solid #2a2f3a; border-radius: 8px; padding: 12px; margin: 12px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .diff .add { color: #84c79d; }
@@ -24,11 +26,19 @@
   <h1>VIGIL Matrix Lite Options</h1>
 
   <div class="setting">
+    <p class="settingHead"><strong>Default mode</strong> — what happens to a request that no matrix cell covers. Applies immediately.</p>
     <label>
-      <input type="checkbox" id="defaultDeny" />
-      <span><strong>Default-deny (hard mode)</strong> — block every request type by default; only explicit allow rules pass.</span>
+      <input type="radio" name="defaultMode" value="open" />
+      <span><strong>Open</strong> — nothing is blocked by default; you block explicitly. (Default; behaves like earlier versions with default-deny off.)</span>
     </label>
-    <p class="muted warn">uMatrix-style. Most pages will break until you allow their core domains. Applies immediately.</p>
+    <label>
+      <input type="radio" name="defaultMode" value="relaxed" />
+      <span><strong>Relaxed</strong> — block third-party scripts, frames and XHR/fetch, and strip third-party cookies. First-party requests, and third-party images, CSS, fonts and media, still load. Explicit allow cells always win.</span>
+    </label>
+    <label>
+      <input type="radio" name="defaultMode" value="hard" />
+      <span class="warn"><strong>Hard</strong> — block every request type by default; only explicit allow rules pass. uMatrix-style: most pages break until you allow their core domains.</span>
+    </label>
   </div>
 
   <div class="setting">
@@ -43,7 +53,7 @@
   <p class="muted">
     One rule per line: <code>&lt;scope&gt; &lt;target&gt; &lt;type&gt; block|allow</code> ·
     <code>switch: &lt;name&gt; &lt;scope&gt; on|off</code> ·
-    <code>setting: default-deny on|off</code> · <code>#</code> starts a comment.<br />
+    <code>setting: default-mode open|relaxed|hard</code> · <code>#</code> starts a comment.<br />
     Types: <code>* script xhr frame image css font media cookie</code> —
     switches: <code>matrix-off no-inline-script no-worker strip-referrer https-upgrade</code>.
   </p>
