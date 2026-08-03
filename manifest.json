@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VIGIL Matrix Lite",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Experimental request policy matrix: per-site control of scripts, frames, cookies and headers. declarativeNetRequest, local-only.",
   "minimum_chrome_version": "121",
   "icons": {
