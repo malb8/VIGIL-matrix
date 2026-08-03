@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.12.0 — 2026-08-03
+
+### UI
+- **Popup layout overhaul: no more two-axis scrolling.** The matrix section
+  is now the single scroll container in the popup/side panel; everything
+  above it (header, summary, scope bar, switches, legend, toolbars) is fixed
+  chrome that never scrolls away.
+  - **Vertical scrolling** stays local to the matrix: the header row (the
+    `"*"` row with its cell buttons) is `position: sticky; top: 0` inside
+    that one container, so it stays visible while rows scroll underneath.
+  - **Horizontal scrolling is eliminated in the common case.** Cells shrank
+    to a 16px visual square (from 22px) with a fixed `table-layout` and a
+    `<colgroup>` that gives the domain column an explicit width and lets the
+    9 resource columns split the rest equally — the whole grid now fits
+    inside Chrome's 800px popup cap without a horizontal scrollbar for a
+    typical 9-column matrix. If a hostname is still wider than the domain
+    column, the first column itself is `position: sticky; left: 0` (with the
+    corner cell sticky on both axes) so it never disappears mid-scroll.
+  - Domain names truncate with an ellipsis (full name still in the tooltip);
+    indented hostname sub-rows truncate from the **left** instead (a
+    `direction: rtl` trick) so the distinguishing part next to the ⤷ arrow
+    doesn't get crowded out by a long shared suffix.
+  - All sticky cells (header, first column, corner) get opaque, row-matched
+    backgrounds — the table now zebra-stripes each row (including host sub-
+    rows, which keep their own shade) so a sticky cell's background is
+    identical to the rest of its row and nothing "ghosts" through it while
+    scrolling.
+- **Cell compaction.** Visual cells are 16px, but the clickable `<button>`
+  around each one keeps a ~22px padded hit target (padding on the button,
+  not the colored square) so clicking stays comfortable and the buttons
+  remain keyboard-focusable with a visible focus ring. The header `"*"` row
+  and the "All" column use the exact same cell size as the body so columns
+  stay aligned.
+  - **Density encoding replaces in-cell text.** A cell for a `(target,
+    type)` pair with no observed traffic now renders its state (block /
+    allow / inherited / suggestion) at ~55% opacity instead of full
+    intensity — no numbers are drawn inside cells at this size. Exact counts
+    remain in the existing tooltip.
+  - The pending/dirty ring stayed a solid 2px amber outline, kept visually
+    distinct from the diagonal-stripe suggestion tints at the smaller size.
+- **Density pass on rows.** The per-domain meta line ("third-party · 190
+  observed · 3 hosts") moved into the row's tooltip; only the observed count
+  survives on-row, as a small pill badge next to the domain name. Row
+  padding shrank so noticeably more rows fit in the 600px popup height.
+- **Legend collapsed behind a "?" toggle chip** that expands it as an
+  overlay on demand instead of permanently consuming a row; the open/closed
+  state is remembered for the session (`sessionStorage`, not
+  `storage.local`).
+- **Side panel is the scale escape hatch.** The popup's 800×600 cap is
+  claimed explicitly (body renders at the full budget instead of
+  auto-sizing narrower); in the side panel (detected via
+  `chrome.extension.getViews`, since both surfaces load the same
+  `popup.html`) that cap is dropped — width 100%, matrix fills the available
+  height. When the popup's matrix exceeds 25 rows, a small hint appears
+  above it ("Large matrix? Open in side panel") linking the existing
+  side-panel action.
+- No behavior change: cell cycling, expanders, switches, scope bar, and the
+  matched-rules viewer are unchanged.
+
 ## 0.11.0 — 2026-07-13
 
 ### Features

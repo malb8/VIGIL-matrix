@@ -1,6 +1,8 @@
 :root {
   --bg: #111318;
   --panel: #181b22;
+  --row-alt: #1a1e26;
+  --row-host: #14171d;
   --text: #e8eaf0;
   --muted: #9aa3af;
   --line: #2a2f3a;
@@ -14,130 +16,289 @@
 }
 
 * { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+/* v0.12: claim the full Chrome popup budget (800x600 max) instead of
+   letting the popup auto-size to a narrower box; the matrix section is the
+   only flex-growing region so extra vertical space goes to rows. */
 body {
-  width: 820px;
-  max-height: 660px;
+  width: 800px;
+  height: 600px;
   margin: 0;
-  padding: 12px;
+  padding: 8px 10px;
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 12px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow: hidden;
 }
-header, footer, .toolbar, .legend, .summary, .scopebar {
+
+/* Side panel context (see popup.js detectSidePanel): no popup size cap, use
+   whatever height/width the panel actually gets. */
+body.sidepanel {
+  width: 100%;
+  height: 100vh;
+}
+
+header, footer, .toolbar, .legendBar, .summary, .scopebar, .sidePanelHint {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
-header { justify-content: space-between; margin-bottom: 10px; }
+header { justify-content: space-between; }
 header > div:last-child { display: flex; gap: 6px; }
-h1 { margin: 0; font-size: 16px; }
-p { margin: 2px 0 0; color: var(--muted); }
+h1 { margin: 0; font-size: 15px; }
+p { margin: 1px 0 0; color: var(--muted); }
 button {
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--text);
   border-radius: 6px;
-  padding: 6px 9px;
+  padding: 5px 8px;
   cursor: pointer;
+  font-size: 12px;
 }
 button:hover:not(:disabled) { border-color: #566174; }
 button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid #7aa2f7; outline-offset: 1px; }
+
 .summary {
   justify-content: space-between;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px;
-  margin-bottom: 8px;
+  padding: 6px 8px;
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
-.modeStatus { justify-content: flex-start; }
+.modeStatus { font-size: 11px; flex: 0 0 auto; }
 .modeStatus:empty { display: none; }
-.legend { color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
-.scopebar { margin-bottom: 8px; flex-wrap: wrap; }
+
+.scopebar { flex-wrap: wrap; }
 .scopeButton.active { border-color: #7aa2f7; background: #202b43; }
+
+/* v0.12: legend is a single "?" toggle chip; the panel it reveals overlays
+   the layout instead of pushing it, so collapsed it costs one row only. */
+.legendBar { position: relative; }
+.legendToggle {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+.legendToggle[aria-expanded="true"] { border-color: #7aa2f7; background: #202b43; }
+.legend {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  color: var(--muted);
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  background: #20242d;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+}
+.legend[hidden] { display: none; }
 .legend span { display: inline-flex; align-items: center; gap: 4px; }
-.toolbar { margin-bottom: 8px; flex-wrap: wrap; }
+
+.toolbar { flex-wrap: wrap; }
 .primaryActions {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px;
+  padding: 6px 8px;
 }
-#matrix, .matches {
+
+.sidePanelHint { font-size: 11px; }
+.sidePanelHint a { color: #7aa2f7; }
+
+.switches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+.switchChip {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+.switchChip.on { border-color: #7aa2f7; background: #202b43; color: #c7d2fe; }
+.switchChip.danger.on { border-color: #d3a533; background: #43310f; color: #ffd27a; }
+
+/* ---------------- matrix: the one scroll container ---------------- */
+
+.matrix {
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: auto;
-  max-height: 400px;
   background: var(--panel);
+  flex: 1 1 auto;
+  min-height: 60px;
 }
+
 table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
+  table-layout: fixed;
 }
+/* Domain column gets a generous fixed width (v0.12 cell compaction leaves
+   headroom); the 9 resource columns split whatever remains equally, which
+   is how `table-layout: fixed` treats columns with no explicit width. */
+col.domainCol { width: 260px; }
+
 th, td {
   border-bottom: 1px solid var(--line);
-  padding: 5px 6px;
+  padding: 2px 4px;
   white-space: nowrap;
   text-align: center;
+  font-size: 11px;
 }
 th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
   background: #20242d;
   color: var(--muted);
   font-weight: 600;
+  padding: 3px 2px;
 }
-td.domain {
+th.domainHead {
+  left: 0;
+  z-index: 3; /* corner cell: sticky on both axes, above everything else */
   text-align: left;
-  max-width: 300px;
+  padding-left: 6px;
+}
+
+td.domain {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  padding: 2px 4px 2px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+/* Row striping, applied to every cell in a row (including the sticky domain
+   column) so a scrolled sticky cell's background is identical to the rest
+   of its row and nothing "ghosts" through underneath it. */
+tbody tr:nth-child(odd) td { background: var(--panel); }
+tbody tr:nth-child(even) td { background: var(--row-alt); }
+tbody tr.hostRow td { background: var(--row-host); }
+
+.domainName {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.domain small { color: var(--muted); display: block; }
+/* Host rows: truncate from the LEFT (direction trick) so a long shared
+   suffix doesn't crowd out the subdomain label closest to it; full
+   hostname is still available in the title tooltip. */
+.hostLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+}
+.hostArrow { flex: 0 0 auto; }
+.hostText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.countBadge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--noop);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* v0.12 cell compaction: small 16px visual squares, but the clickable
+   button around each one stays ~22px+ so the target is still comfortable
+   and keyboard-focusable. Header row ("*" row) and the All column use the
+   exact same .cell size so columns stay aligned. */
+.cellButton {
+  border: 0;
+  margin: 0;
+  padding: 3px;
+  background: transparent;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.cellButton:focus-visible {
+  outline: 2px solid #7aa2f7;
+  outline-offset: 1px;
+}
 .cell {
-  display: inline-block;
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
   border: 1px solid #3b4453;
-  vertical-align: middle;
 }
 .cell.noop { background: var(--noop); }
 .cell.block { background: var(--block); border-color: #c86464; }
 .cell.allow { background: var(--allow); border-color: #62a87d; }
 .cell.suggestAllow {
-  background: repeating-linear-gradient(135deg, var(--suggest-allow), var(--suggest-allow) 5px, #294f3f 5px, #294f3f 10px);
+  background: repeating-linear-gradient(135deg, var(--suggest-allow), var(--suggest-allow) 3px, #294f3f 3px, #294f3f 6px);
   border-color: #4b8b68;
 }
 .cell.suggestBlock {
-  background: repeating-linear-gradient(135deg, var(--suggest-block), var(--suggest-block) 5px, #6a2d2d 5px, #6a2d2d 10px);
+  background: repeating-linear-gradient(135deg, var(--suggest-block), var(--suggest-block) 3px, #6a2d2d 3px, #6a2d2d 6px);
   border-color: #bd5656;
 }
-.cell.unseen { opacity: .35; }
+/* Density encoding replaces in-cell counts: no observed activity for this
+   (target, type) pair dims the cell's state rather than drawing a number.
+   Exact counts remain in the tooltip. Applies uniformly to every state. */
+.cell.unseen { opacity: .55; }
 .cell.dirty {
   box-shadow: 0 0 0 2px var(--pending);
 }
 .cell.inherited {
   opacity: .75;
 }
-.cellButton {
-  border: 0;
-  padding: 0;
-  background: transparent;
-}
+.cell.inherited.unseen { opacity: .45; }
 .sameSite { color: #84c79d; }
 .thirdParty { color: var(--text); }
 .trackerDomain { color: #e28b8b; }
 .warn { color: var(--warn); }
 .pending { color: var(--pending); font-weight: 700; }
 .muted { color: var(--muted); }
-.matches { max-height: 160px; margin-top: 8px; padding: 8px; overflow: auto; }
+.matches { max-height: 160px; margin-top: 4px; padding: 8px; overflow: auto; flex: 0 0 auto; }
 .matches h2 { margin: 0 0 6px; font-size: 13px; }
 .match { border-top: 1px solid var(--line); padding: 6px 0; }
 .match:first-of-type { border-top: 0; }
 .match code { color: #c7d2fe; }
-footer { justify-content: flex-end; margin-top: 10px; }
+footer { justify-content: flex-end; }
 .error { color: #ff9999; padding: 10px; }
 select {
   border: 1px solid var(--line);
@@ -148,28 +309,10 @@ select {
 }
 .cell.override { outline: 2px solid #d3a533; outline-offset: 1px; }
 .cell.inheritedScope { box-shadow: inset 0 0 0 2px #566174; }
-.cell.inherited::after { content: ""; }
-
-/* ---------------- v0.9 additions ---------------- */
-
-/* Switch chips (per-scope toggles) */
-.switches {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-.switchChip {
-  font-size: 12px;
-  padding: 4px 8px;
-  border-radius: 999px;
-}
-.switchChip.on { border-color: #7aa2f7; background: #202b43; color: #c7d2fe; }
-.switchChip.danger.on { border-color: #d3a533; background: #43310f; color: #ffd27a; }
 
 /* Hostname hierarchy rows */
 .expander {
+  flex: 0 0 auto;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -177,12 +320,10 @@ select {
   cursor: pointer;
   font-size: 12px;
 }
-.expanderSpacer { display: inline-block; width: 16px; }
+.expanderSpacer { flex: 0 0 auto; display: inline-block; width: 16px; }
 tr.hostRow td.domain { padding-left: 26px; }
-tr.hostRow td { background: #14171d; }
-tr.hostRow .thirdParty, tr.hostRow .sameSite, tr.hostRow .trackerDomain { font-size: 12px; }
+tr.hostRow .thirdParty, tr.hostRow .sameSite, tr.hostRow .trackerDomain { font-size: 11px; }
 
 /* Wildcard header row cells */
-th .cellButton { display: block; margin: 3px auto 0; }
-th.domainHead { text-align: left; color: var(--text); }
-th .cell { width: 18px; height: 18px; }
+th .cellButton { display: flex; margin: 2px auto 0; }
+th.domainHead { color: var(--text); }

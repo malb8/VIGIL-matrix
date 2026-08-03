@@ -76,11 +76,34 @@ let rawSourceDomain = null;   // full page hostname, e.g. app.example.com
 let sourceDomain = null;      // registrable domain, e.g. example.com
 let scopeMode = "domain";     // "global" | "domain" | "host"
 let matchesOpen = false;
+let isSidePanel = false;
+let legendOpen = false;
 const expandedGroups = new Set(); // registrable domains with hostname rows shown
 
 const $ = (id) => document.getElementById(id);
 
+/*
+ * popup.html is reused verbatim as the side_panel default_path (manifest.json),
+ * so the only way to tell them apart at runtime is to ask the extension API
+ * which surface this document is. A window open as an action popup shows up
+ * in chrome.extension.getViews({type:"popup"}); the side panel never does.
+ */
+function detectSidePanel() {
+  try {
+    const popups = chrome.extension?.getViews?.({ type: "popup" }) || [];
+    return !popups.includes(window);
+  } catch (_) {
+    return false;
+  }
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
+  isSidePanel = detectSidePanel();
+  document.body.classList.toggle("sidepanel", isSidePanel);
+
+  legendOpen = sessionStorage.getItem("vigil-legend-open") === "1";
+  setLegendOpen(legendOpen);
+
   $("refresh").addEventListener("click", load);
   $("scopeGlobal").addEventListener("click", () => switchScope("global"));
   $("scopeDomain").addEventListener("click", () => switchScope("domain"));
@@ -97,8 +120,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("exportPolicy").addEventListener("click", guard(exportPolicy));
   $("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
   $("openSidePanel").addEventListener("click", guard(openSidePanel));
+  $("legendToggle").addEventListener("click", () => setLegendOpen(!legendOpen));
+  $("openSidePanelHint").addEventListener("click", (event) => {
+    event.preventDefault();
+    guard(openSidePanel)();
+  });
   await load();
 });
+
+function setLegendOpen(open) {
+  legendOpen = open;
+  $("legendPanel").hidden = !open;
+  $("legendToggle").setAttribute("aria-expanded", String(open));
+  sessionStorage.setItem("vigil-legend-open", open ? "1" : "0");
+}
 
 function guard(fn) {
   return () => Promise.resolve(fn()).catch((error) => renderError(String(error?.message || error)));
@@ -438,6 +473,10 @@ function render() {
       ? "Mode: hard — everything blocked unless explicitly allowed"
       : "Mode: open — nothing blocked by default";
 
+  // v0.12: the popup caps out at 800x600, so a big matrix is genuinely
+  // cramped there — nudge toward the side panel instead of fighting it.
+  $("sidePanelHint").hidden = isSidePanel || domains.length <= 25;
+
   $("scopeGlobal").classList.toggle("active", scopeMode === "global");
   $("scopeDomain").classList.toggle("active", scopeMode === "domain");
   $("scopeHost").classList.toggle("active", scopeMode === "host");
@@ -495,6 +534,17 @@ function renderSwitches(scopeKey) {
 
 function renderMatrixTable(groups, domains) {
   const table = document.createElement("table");
+
+  // Fixed table-layout: the domain column gets an explicit width; the 9
+  // resource columns have none, so the fixed-layout algorithm splits the
+  // remaining space between them equally — this is what keeps the grid
+  // inside ~800px without a horizontal scrollbar.
+  const colgroup = document.createElement("colgroup");
+  const domainCol = document.createElement("col");
+  domainCol.className = "domainCol";
+  colgroup.appendChild(domainCol);
+  for (let i = 0; i < RESOURCE_COLUMNS.length; i++) colgroup.appendChild(document.createElement("col"));
+  table.appendChild(colgroup);
 
   // Header row doubles as the "*" (all hosts) row, uMatrix-style: every
   // column header carries the cell button for ("*", type); the top-left
@@ -589,15 +639,40 @@ function matrixRow({ target, byType, historical, indent, expandable = false, exp
   const labelClass = tracker ? "trackerDomain" : sameSite ? "sameSite" : "thirdParty";
   const trustLabel = tracker ? "tracker/adtech candidate" : sameSite ? "same-site/core candidate" : "third-party";
   const countText = total > 0 ? `${total} observed` : historyTotal > 0 ? `history (${historyTotal})` : "policy/history only";
+  const metaText = indent
+    ? `${target} · ${countText}`
+    : `${target} · ${trustLabel} · ${countText}${expandable ? ` · ${hostCount} host(s)` : ""}`;
+
+  // v0.12: the old "third-party · N observed · N hosts" meta line moved
+  // into this tooltip; only the count survives on-row, as a small badge.
+  domainCell.title = metaText;
+
   const label = document.createElement("span");
-  label.className = labelClass;
-  label.textContent = indent ? `↳ ${target}` : target;
-  const small = document.createElement("small");
-  small.textContent = indent
-    ? countText
-    : `${trustLabel} · ${countText}${expandable ? ` · ${hostCount} host(s)` : ""}`;
+  if (indent) {
+    // Host rows truncate from the left (direction trick) so a long shared
+    // suffix doesn't crowd out the part of the hostname nearest the arrow;
+    // the full hostname is always available via the tooltip above.
+    label.className = `${labelClass} hostLabel`;
+    const arrow = document.createElement("span");
+    arrow.className = "hostArrow";
+    arrow.textContent = "↳ ";
+    const hostText = document.createElement("span");
+    hostText.className = "hostText";
+    hostText.textContent = target;
+    label.appendChild(arrow);
+    label.appendChild(hostText);
+  } else {
+    label.className = `${labelClass} domainName`;
+    label.textContent = target;
+  }
   domainCell.appendChild(label);
-  domainCell.appendChild(small);
+
+  if (total > 0 || historyTotal > 0) {
+    const badge = document.createElement("span");
+    badge.className = "countBadge";
+    badge.textContent = total > 0 ? String(total) : `h${historyTotal}`;
+    domainCell.appendChild(badge);
+  }
   row.appendChild(domainCell);
 
   for (const [resourceType] of RESOURCE_COLUMNS) {
@@ -956,6 +1031,7 @@ function renderError(message) {
   $("summary").innerHTML = "";
   $("modeStatus").textContent = "";
   $("switches").innerHTML = "";
+  $("sidePanelHint").hidden = true;
   $("matrix").innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
 }
 

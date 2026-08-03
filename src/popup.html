@@ -32,16 +32,20 @@
   <!-- v0.9: per-scope switches (committed immediately, no draft layer) -->
   <section id="switches" class="switches"></section>
 
-  <section class="legend">
-    <span><b class="cell block"></b> block</span>
-    <span><b class="cell allow"></b> allow</span>
-    <span><b class="cell noop"></b> noop</span>
-    <span><b class="cell block inherited"></b> inherited (less specific cell)</span>
-    <span><b class="cell noop dirty"></b> pending (unsaved)</span>
-    <span><b class="cell suggestBlock"></b> suggested tracker block</span>
-    <span><b class="cell suggestAllow"></b> suggested core</span>
-    <span><b class="cell noop unseen"></b> history/policy only</span>
-    <span class="muted">Header row = the "*" row · "All" column = all types · Cookie strips Cookie/Set-Cookie (block-only)</span>
+  <!-- v0.12: legend collapsed behind a toggle chip to reclaim vertical space -->
+  <section class="legendBar">
+    <button id="legendToggle" class="legendToggle" title="Show/hide the cell color legend" aria-expanded="false">?</button>
+    <div id="legendPanel" class="legend" hidden>
+      <span><b class="cell block"></b> block</span>
+      <span><b class="cell allow"></b> allow</span>
+      <span><b class="cell noop"></b> noop</span>
+      <span><b class="cell block inherited"></b> inherited (less specific cell)</span>
+      <span><b class="cell noop dirty"></b> pending (unsaved)</span>
+      <span><b class="cell suggestBlock"></b> suggested tracker block</span>
+      <span><b class="cell suggestAllow"></b> suggested core</span>
+      <span><b class="cell noop unseen"></b> no observed activity (dimmed)</span>
+      <span class="muted">Header row = the "*" row · "All" column = all types · Cookie strips Cookie/Set-Cookie (block-only)</span>
+    </div>
   </section>
 
   <section class="toolbar primaryActions">
@@ -59,8 +63,16 @@
     <button id="showMatches">Show matched rules</button>
   </section>
 
-  <section id="modeStatus" class="summary modeStatus"></section>
-  <main id="matrix"></main>
+  <p id="modeStatus" class="modeStatus"></p>
+
+  <!-- v0.12: popup-only nudge toward the side panel once the matrix gets tall -->
+  <p id="sidePanelHint" class="sidePanelHint" hidden>
+    Large matrix? <a href="#" id="openSidePanelHint">Open in side panel</a>
+  </p>
+
+  <!-- v0.12: the one scroll container. thead / first column / corner cell are
+       sticky inside it; everything else above never scrolls away. -->
+  <main id="matrix" class="matrix"></main>
   <section id="matches" class="matches" hidden></section>
 
   <footer>
