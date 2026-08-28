@@ -316,6 +316,15 @@
     "sso",
     "secure"
   ],
+  "trackingHostHints": [
+    "analytics", "track", "tracking", "trk",
+    "metrics", "metric", "telemetry",
+    "pixel", "pixels", "beacon", "beacons",
+    "collect", "collector", "stats", "stat",
+    "tag", "tags", "insight", "insights",
+    "events", "event", "log", "logs",
+    "click", "clicks", "adserver", "ads"
+  ],
   "policyPacks": {
     "relaxed": {
       "label": "Relaxed",

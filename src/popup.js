@@ -64,6 +64,22 @@ const DEFAULT_CLASSIFICATION = {
     "pubmatic.com", "rubiconproject.com", "mathtag.com", "demdex.net", "omtrdc.net", "newrelic.com", "sentry.io"
   ],
   coreHostHints: ["www", "static", "assets", "cdn", "img", "images", "media", "fonts", "api", "app", "login", "auth", "sso"],
+  // Subdomain labels commonly used by first-party-disguised tracking
+  // infrastructure (CNAME cloaking): a subdomain of the site you're on that
+  // matches one of these is flagged as a possible cloaked tracker rather
+  // than trusted as same-site by default. Local heuristic only - no DNS
+  // resolution, which Chromium extensions cannot do at all (see
+  // conversation/roadmap notes on CNAME cloaking). Expect false positives
+  // and false negatives; this is a nudge to go verify, not a verdict.
+  trackingHostHints: [
+    "analytics", "track", "tracking", "trk",
+    "metrics", "metric", "telemetry",
+    "pixel", "pixels", "beacon", "beacons",
+    "collect", "collector", "stats", "stat",
+    "tag", "tags", "insight", "insights",
+    "events", "event", "log", "logs",
+    "click", "clicks", "adserver", "ads"
+  ],
   policyPacks: {}
 };
 
@@ -699,6 +715,10 @@ function matrixRow({ target, byType, historical, indent, expandable = false, exp
   if (indent) row.className = "hostRow";
   const sameSite = isSameSite(target, sourceDomain);
   const tracker = isKnownTrackerDomain(target);
+  // Only meaningful on hostname sub-rows: the top-level row's target is the
+  // registrable domain itself, which looksLikeCloakedTracker() already
+  // excludes (it's not a subdomain of anything).
+  const cloak = indent && looksLikeCloakedTracker(target);
   const total = Object.values(byType || {}).reduce((acc, x) => acc + (x?.count || 0), 0);
   const historyTotal = Object.values(byType || {}).reduce((acc, x) => acc + (x?.historicalCount || 0), 0);
 
@@ -722,11 +742,11 @@ function matrixRow({ target, byType, historical, indent, expandable = false, exp
     domainCell.appendChild(spacer);
   }
 
-  const labelClass = tracker ? "trackerDomain" : sameSite ? "sameSite" : "thirdParty";
+  const labelClass = cloak ? "cloakTracker" : tracker ? "trackerDomain" : sameSite ? "sameSite" : "thirdParty";
   const trustLabel = tracker ? "tracker/adtech candidate" : sameSite ? "same-site/core candidate" : "third-party";
   const countText = total > 0 ? `${total} observed` : historyTotal > 0 ? `history (${historyTotal})` : "policy/history only";
   const metaText = indent
-    ? `${target} · ${countText}`
+    ? `${target} · ${countText}${cloak ? " · possible CNAME-cloaked tracker (naming heuristic, verify before blocking)" : ""}`
     : `${target} · ${trustLabel} · ${countText}${expandable ? ` · ${hostCount} host(s)` : ""}`;
 
   // v0.12: the old "third-party · N observed · N hosts" meta line moved
@@ -802,6 +822,7 @@ function cellButton(target, resourceType, { observed, seen }) {
   if (!inherited && (working === "block" || working === "allow")) classes.push(working);
   else if (inherited) classes.push(displayAction, "inherited");
   else if (suggested === "suggestBlock") classes.push("suggestBlock");
+  else if (suggested === "suggestCloak") classes.push("suggestCloak");
   else if (suggested === "suggestAllow") classes.push("suggestAllow");
   else classes.push("noop");
   if (!seen) classes.push("unseen");
@@ -839,6 +860,10 @@ function buildCellTitle({ target, resourceType, working, committed, inherited, i
     }
   }
   if (suggested === "suggestBlock") lines.push("suggestion: known tracker — consider blocking");
+  if (suggested === "suggestCloak") {
+    lines.push("suggestion: same-site hostname, but its subdomain label matches a known tracking-infrastructure naming pattern (possible CNAME-cloaked tracker).");
+    lines.push("this is a local naming heuristic, not a verdict — verify before blocking (Chromium extensions cannot resolve CNAMEs to check for real).");
+  }
   if (suggested === "suggestAllow") lines.push("suggestion: same-site/core resource");
   if (observed) {
     if (observed.count) lines.push(`observed now: ${observed.count}`);
@@ -887,6 +912,10 @@ function groupResources(resources) {
 function classifySuggestion({ target, resourceType }) {
   if (resourceType === TYPE_WILDCARD) return "neutral";
   if (isKnownTrackerDomain(target) && HIGH_RISK_DEFAULT_TYPES.has(resourceType)) return "suggestBlock";
+  // Checked before the blanket same-site allow below: a cloak-flagged
+  // target IS same-site by hostname, so it would otherwise fall into that
+  // bucket and never get flagged.
+  if (looksLikeCloakedTracker(target) && HIGH_RISK_DEFAULT_TYPES.has(resourceType)) return "suggestCloak";
   if (isSameSite(target, sourceDomain) && resourceType !== "cookie") return "suggestAllow";
   return "neutral";
 }
@@ -922,6 +951,31 @@ function isSameSite(hostA, hostB) {
   const a = registrableDomain(hostA);
   const b = registrableDomain(hostB);
   return a && b && a === b;
+}
+
+/*
+ * CNAME-cloaking heuristic: a same-site subdomain (so it LOOKS first-party
+ * by hostname, and would otherwise fall into the blanket same-site "trust
+ * it" bucket below) whose own subdomain label matches a known
+ * tracking-infrastructure naming convention. This cannot detect actual
+ * cloaking - that requires resolving the CNAME chain, an API Chromium does
+ * not expose to extensions at all (Firefox's uBlock Origin can do this via
+ * browser.dns.resolve(); there is no equivalent here). It is purely a local
+ * naming-pattern nudge to go verify a specific host, not a verdict - a
+ * legitimate "stats.example.com" status page would false-positive here.
+ * coreHostHints acts as a suppressor: an ordinary infra label wins over a
+ * coincidental tracking-hint match on a different label in the same chain.
+ */
+function looksLikeCloakedTracker(target) {
+  if (target === TARGET_WILDCARD) return false;
+  if (!isSameSite(target, sourceDomain)) return false;
+  const reg = registrableDomain(target);
+  if (!reg || target === reg) return false; // the bare registrable domain itself, not a subdomain
+  const subLabels = target.slice(0, target.length - reg.length - 1).split(".").filter(Boolean);
+  const coreHints = classification.coreHostHints || DEFAULT_CLASSIFICATION.coreHostHints;
+  if (subLabels.some((label) => coreHints.includes(label))) return false;
+  const trackingHints = classification.trackingHostHints || DEFAULT_CLASSIFICATION.trackingHostHints;
+  return subLabels.some((label) => trackingHints.includes(label));
 }
 
 function registrableDomain(host) {

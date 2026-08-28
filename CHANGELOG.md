@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.13.2 — 2026-08-28
+
+### Added
+- **CNAME-cloaking naming heuristic.** A same-site subdomain (e.g.
+  `analytics.example.com`) whose own label matches a curated list of
+  tracking-infrastructure naming patterns (`trackingHostHints` in
+  `data/domain-classification.json`) is now flagged in the matrix as a
+  possible first-party-disguised tracker, with distinct amber "verify
+  before blocking" styling — separate from the existing red "known
+  tracker" suggestion, since this is a naming guess, not a verdict. The
+  existing (previously unused) `coreHostHints` list now doubles as a
+  suppressor: a subdomain chain containing an ordinary infra label (`api`,
+  `cdn`, `www`, etc.) is never flagged even if another label in the chain
+  also matches a tracking hint. This cannot detect actual CNAME cloaking —
+  that requires resolving the CNAME chain, an API Chromium extensions have
+  no access to at all (unlike Firefox's `browser.dns.resolve()`, which is
+  how uBlock Origin does it there) — so it is a local pattern nudge to go
+  verify a specific host, not a real detector. Deliberately excluded from
+  "Apply suggested blocks": false positives here are costlier than for a
+  known external tracker domain, so the decision stays manual.
+
 ## 0.13.1 — 2026-08-28
 
 ### Fixed

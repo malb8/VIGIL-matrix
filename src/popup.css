@@ -11,6 +11,7 @@
   --allow: #2f6f4e;
   --suggest-allow: #1f3f31;
   --suggest-block: #4a2323;
+  --suggest-cloak: #4a3a1f;
   --pending: #d3a533;
   --warn: #b8872a;
 }
@@ -322,6 +323,14 @@ tbody tr.hostRow td { background: var(--row-host); }
   background: repeating-linear-gradient(135deg, var(--suggest-block), var(--suggest-block) 3px, #6a2d2d 3px, #6a2d2d 6px);
   border-color: #bd5656;
 }
+/* Distinct amber/caution styling (matches --warn) rather than the red/green
+   suggestBlock/suggestAllow tints: this is an unverified naming heuristic,
+   not a same-confidence verdict - it should read visually as "go check
+   this", not "block this". */
+.cell.suggestCloak {
+  background: repeating-linear-gradient(135deg, var(--suggest-cloak), var(--suggest-cloak) 3px, #6a4d1f 3px, #6a4d1f 6px);
+  border-color: #b8872a;
+}
 /* Density encoding replaces in-cell counts: no observed activity for this
    (target, type) pair dims the cell's state rather than drawing a number.
    Exact counts remain in the tooltip. Applies uniformly to every state. */
@@ -336,6 +345,7 @@ tbody tr.hostRow td { background: var(--row-host); }
 .sameSite { color: #84c79d; }
 .thirdParty { color: var(--text); }
 .trackerDomain { color: #e28b8b; }
+.cloakTracker { color: #d3a533; }
 .warn { color: var(--warn); }
 .pending { color: var(--pending); font-weight: 700; }
 .muted { color: var(--muted); }
@@ -368,7 +378,7 @@ select {
 }
 .expanderSpacer { flex: 0 0 auto; display: inline-block; width: 16px; }
 tr.hostRow td.domain { padding-left: 26px; }
-tr.hostRow .thirdParty, tr.hostRow .sameSite, tr.hostRow .trackerDomain { font-size: 11px; }
+tr.hostRow .thirdParty, tr.hostRow .sameSite, tr.hostRow .trackerDomain, tr.hostRow .cloakTracker { font-size: 11px; }
 
 /* Wildcard header row cells */
 th .cellButton { display: flex; margin: 2px auto 0; }
