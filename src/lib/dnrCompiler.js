@@ -50,11 +50,13 @@
  *
  * Per-scope switches (uMatrix's blue puzzle toggles) compile to dedicated
  * rules above the matrix bands and are committed immediately (no draft
- * layer): strip-referrer, https-upgrade, no-inline-script (CSP),
- * no-worker (CSP) and matrix-off (persistent allowAllRequests). Switches are
- * independent per-scope toggles, not competing cells, so they deliberately
- * keep the cheap global/apex/deeper 3-tier scope bump (switchScopeTier)
- * rather than the widened depth-aware scopeLevel - see switchRules.
+ * layer): strip-referrer, strip-tracking-params (redirect: drop known
+ * click/campaign query params from navigations), https-upgrade,
+ * no-inline-script (CSP), no-worker (CSP) and matrix-off (persistent
+ * allowAllRequests). Switches are independent per-scope toggles, not
+ * competing cells, so they deliberately keep the cheap global/apex/deeper
+ * 3-tier scope bump (switchScopeTier) rather than the widened depth-aware
+ * scopeLevel - see switchRules.
  */
 
 import { registrableDomain } from "./domains.js";
@@ -122,11 +124,31 @@ export const SESSION_RULE_BASE_ID = 200000;
 export const SESSION_RULE_MAX_ID = 299999;
 
 export const SWITCH_NAMES = [
-  "matrix-off",        // persistent allowAllRequests for the scope
-  "no-inline-script",  // CSP: block inline <script> execution
-  "no-worker",         // CSP: block Worker / SharedWorker / ServiceWorker
-  "strip-referrer",    // remove the Referer request header
-  "https-upgrade"      // upgrade http:// requests to https://
+  "matrix-off",             // persistent allowAllRequests for the scope
+  "no-inline-script",       // CSP: block inline <script> execution
+  "no-worker",              // CSP: block Worker / SharedWorker / ServiceWorker
+  "strip-referrer",         // remove the Referer request header
+  "https-upgrade",          // upgrade http:// requests to https://
+  "strip-tracking-params"   // redirect: drop known tracking query params from navigations
+];
+
+// Known click/campaign-tracking query parameters stripped by the
+// strip-tracking-params switch. DNR's queryTransform.removeParams matches
+// exact param names only (no wildcards/regex), so this is a curated,
+// human-reviewable list rather than an attempt at EasyList/ClearURLs parity -
+// consistent with the project's local-seed-list philosophy elsewhere.
+export const TRACKING_PARAMS = [
+  // UTM (Google Analytics campaign tagging)
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "utm_id", "utm_name", "utm_referrer", "utm_source_platform",
+  // Ad-platform click IDs
+  "gclid", "gclsrc", "dclid", "wbraid", "gbraid",
+  "fbclid", "msclkid", "ttclid", "twclid", "yclid",
+  // Email/CRM campaign tracking
+  "mc_eid", "mc_cid", "_hsenc", "_hsmi", "mkt_tok", "vero_id",
+  // Misc referral/analytics IDs
+  "igshid", "si", "ref_src", "ref_url", "spm",
+  "oly_anon_id", "oly_enc_id", "wickedid", "s_cid"
 ];
 
 // Real label depth below the registrable domain that scope/target
@@ -147,6 +169,17 @@ export const PRIORITY = {
   MATRIX_BASE: 10,         // + s*32 + t*4 + y*2 + layer   -> 10..265
   COOKIE_BASE: 300,        // + s*16 + t*2 + layer         -> 300..427
   STRIP_REFERRER: 450,     // + switchScopeTier (0..2)     -> 450..452
+  // Sits BELOW https-upgrade on purpose: both are "redirect"-family actions,
+  // and DNR only ever fires the single highest-priority one of those per
+  // request, it cannot compose them into one hop. Keeping the security-
+  // relevant scheme upgrade on top means an http:// request with tracking
+  // params gets upgraded first (params intact on that one internal hop);
+  // the resulting https:// request no longer matches https-upgrade's
+  // `urlFilter: "|http://"` condition, so strip-tracking-params becomes the
+  // winning rule on that second pass and cleans the params anyway. Net
+  // result is correct either way, just via one extra internal redirect hop
+  // when both switches are on for the same request.
+  STRIP_TRACKING_PARAMS: 455, // + switchScopeTier          -> 455..457
   HTTPS_UPGRADE: 460,      // + switchScopeTier
   CSP_NO_INLINE: 470,      // + switchScopeTier
   CSP_NO_WORKER: 476,      // + switchScopeTier
@@ -163,8 +196,39 @@ export const PRIORITY = {
 // with a markup/attribute-injection primitive could run
 // `<script src="data:text/javascript,...">` — not "inline" in CSP terms, so it
 // would sail through). Keeping them out is the whole point of the hardening.
-export const CSP_NO_INLINE_VALUE = "script-src 'unsafe-eval' *";
+//
+// `hashes` (optional): 'sha256-...'/'sha384-...'/'sha512-...' hash-source
+// tokens allowlisting specific known-good inline scripts by exact content
+// hash, so a site that needs a couple of inline bootstrap scripts doesn't
+// have to leave the whole switch off. Nonces are deliberately NOT supported:
+// a real nonce is meant to change every page load, but this value is baked
+// into a static DNR header-append rule compiled ahead of time, and DNR's
+// modifyHeaders cannot read the response body to learn the current nonce -
+// so a "nonce allowlist" would either do nothing (mismatched nonce) or have
+// to stay constant (defeating the point of using a nonce at all). A hash is
+// deterministic from the script's own content, which is what makes it
+// actually usable here: Chrome's own console error for a blocked inline
+// script prints the exact hash to allowlist.
+export function cspNoInlineValue(hashes) {
+  return ["script-src 'unsafe-eval'", ...(hashes || []), "*"].join(" ");
+}
 export const CSP_NO_WORKER_VALUE = "worker-src 'none'";
+
+const CSP_HASH_RE = /^'sha(?:256|384|512)-[A-Za-z0-9+/]+=*'$/;
+
+export function validateCspHash(hash) {
+  if (typeof hash !== "string" || !CSP_HASH_RE.test(hash)) {
+    throw new Error(`Invalid CSP hash-source (expected e.g. 'sha256-BASE64=='): ${hash}`);
+  }
+}
+
+export function validateCspAllowlist(cspAllowlist) {
+  for (const [scope, hashes] of Object.entries(cspAllowlist || {})) {
+    validateScope(scope, "csp allowlist scope");
+    if (!Array.isArray(hashes)) throw new Error(`CSP allowlist for ${scope} must be a list of hashes`);
+    for (const hash of hashes) validateCspHash(hash);
+  }
+}
 
 /* ------------------------------------------------------------------ *
  * Coordinate math
@@ -761,8 +825,9 @@ export function relaxedCookieStripRule(id) {
  * Per-scope switch rules. Committed-only (no draft layer): switches are
  * toggles, not experiments, and apply the moment they are flipped.
  */
-export function switchRules(switches, suffixes, allocateId) {
+export function switchRules(switches, suffixes, allocateId, cspAllowlist = {}) {
   validateSwitches(switches || {});
+  validateCspAllowlist(cspAllowlist || {});
   const rules = [];
 
   for (const [scope, flags] of Object.entries(switches || {})) {
@@ -808,7 +873,7 @@ export function switchRules(switches, suffixes, allocateId) {
     }
 
     for (const [name, priorityBase, cspValue] of [
-      ["no-inline-script", PRIORITY.CSP_NO_INLINE, CSP_NO_INLINE_VALUE],
+      ["no-inline-script", PRIORITY.CSP_NO_INLINE, cspNoInlineValue(cspAllowlist[scope])],
       ["no-worker", PRIORITY.CSP_NO_WORKER, CSP_NO_WORKER_VALUE]
     ]) {
       if (!flags[name]) continue;
@@ -836,6 +901,39 @@ export function switchRules(switches, suffixes, allocateId) {
         rules.push({
           id: allocateId(),
           priority: priorityBase + s,
+          action,
+          condition: { initiatorDomains: [scope], resourceTypes: ["sub_frame"] }
+        });
+      }
+    }
+
+    if (flags["strip-tracking-params"]) {
+      // Navigation-only: main_frame/sub_frame URLs, never subresource
+      // requests - script/xhr/etc. query params are often functionally
+      // significant, so only the URLs a user actually lands on get cleaned.
+      // A no-op redirect (URL unchanged because no listed param is present)
+      // is silently dropped by Chrome, so this is safe to leave on broadly.
+      const action = {
+        type: "redirect",
+        redirect: { transform: { queryTransform: { removeParams: TRACKING_PARAMS } } }
+      };
+      if (isGlobal) {
+        rules.push({
+          id: allocateId(),
+          priority: PRIORITY.STRIP_TRACKING_PARAMS + s,
+          action,
+          condition: { resourceTypes: ["main_frame", "sub_frame"] }
+        });
+      } else {
+        rules.push({
+          id: allocateId(),
+          priority: PRIORITY.STRIP_TRACKING_PARAMS + s,
+          action,
+          condition: { requestDomains: [scope], resourceTypes: ["main_frame", "sub_frame"] }
+        });
+        rules.push({
+          id: allocateId(),
+          priority: PRIORITY.STRIP_TRACKING_PARAMS + s,
           action,
           condition: { initiatorDomains: [scope], resourceTypes: ["sub_frame"] }
         });
@@ -893,10 +991,11 @@ function idAllocator(baseId, maxId, label) {
  * Top-level compile entry points
  * ------------------------------------------------------------------ */
 
-export function compileCommittedRules({ sitePolicies, globalPolicy, switches, defaultDeny = false, defaultMode, suffixes }) {
+export function compileCommittedRules({ sitePolicies, globalPolicy, switches, cspAllowlist, defaultDeny = false, defaultMode, suffixes }) {
   validateSitePolicies(sitePolicies || {});
   validateTargetPolicy(globalPolicy || {});
   validateSwitches(switches || {});
+  validateCspAllowlist(cspAllowlist || {});
 
   const mode = normalizeDefaultMode({ defaultMode, defaultDeny });
   const cells = collectCommittedCells({ sitePolicies: sitePolicies || {}, globalPolicy: globalPolicy || {}, suffixes });
@@ -911,7 +1010,7 @@ export function compileCommittedRules({ sitePolicies, globalPolicy, switches, de
     rules.push(relaxedCookieStripRule(allocate()));
   }
   for (const spec of specs) rules.push(specToRule(spec, allocate()));
-  rules.push(...switchRules(switches || {}, suffixes, allocate));
+  rules.push(...switchRules(switches || {}, suffixes, allocate, cspAllowlist || {}));
   return rules;
 }
 

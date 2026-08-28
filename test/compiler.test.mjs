@@ -24,7 +24,7 @@ import {
   specsToRules,
   resolveOutcome,
   matrixPriority, cookiePriority, scopeLevel, targetSpecificity, switchScopeTier,
-  normalizeDefaultMode, defaultOutcomeFor, CSP_NO_INLINE_VALUE,
+  normalizeDefaultMode, defaultOutcomeFor, cspNoInlineValue, validateCspHash,
   DYNAMIC_RULE_BASE_ID
 } from "../src/lib/dnrCompiler.js";
 import { parseRulesText, serializeRulesText, canonicalLines, diffRules } from "../src/lib/rulesText.js";
@@ -571,8 +571,9 @@ test("neutralizer fallback is mode-aware", () => {
 test("no-inline-script CSP does not allow data:/blob: script sources", () => {
   // Regression for the CSP bypass: `data:`/`blob:` in script-src re-open the
   // pseudo-inline injection the switch exists to close.
-  assert.ok(!/\bdata:/.test(CSP_NO_INLINE_VALUE), CSP_NO_INLINE_VALUE);
-  assert.ok(!/\bblob:/.test(CSP_NO_INLINE_VALUE), CSP_NO_INLINE_VALUE);
+  const cspValue = cspNoInlineValue();
+  assert.ok(!/\bdata:/.test(cspValue), cspValue);
+  assert.ok(!/\bblob:/.test(cspValue), cspValue);
   const rules = compileCommittedRules({
     globalPolicy: {}, sitePolicies: {},
     switches: { "bank.example": { "no-inline-script": true } },
@@ -584,6 +585,38 @@ test("no-inline-script CSP does not allow data:/blob: script sources", () => {
     .find((v) => v.startsWith("script-src"));
   assert.ok(csp, "a script-src CSP header is injected");
   assert.ok(!/\bdata:/.test(csp) && !/\bblob:/.test(csp), csp);
+});
+
+test("validateCspHash accepts sha256/384/512 hash-source tokens, rejects everything else", () => {
+  assert.doesNotThrow(() => validateCspHash("'sha256-AbC123+/==' ".trim()));
+  assert.doesNotThrow(() => validateCspHash("'sha384-xyz='"));
+  assert.doesNotThrow(() => validateCspHash("'sha512-Q=='"));
+  assert.throws(() => validateCspHash("sha256-AbC123==")); // missing quotes
+  assert.throws(() => validateCspHash("'nonce-AbC123'"));  // nonces are not supported
+  assert.throws(() => validateCspHash("'sha1-AbC123=='")); // unsupported algorithm
+  assert.throws(() => validateCspHash("<script>"));
+});
+
+test("no-inline-script CSP allowlists per-scope hashes without leaking to other scopes", () => {
+  const rules = compileCommittedRules({
+    globalPolicy: {}, sitePolicies: {},
+    switches: {
+      "bank.example": { "no-inline-script": true },
+      "other.example": { "no-inline-script": true }
+    },
+    cspAllowlist: { "bank.example": ["'sha256-AbC123=='"] },
+    suffixes: SUFFIXES
+  });
+
+  const bankCsp = evaluate(rules, { domain: "bank.example", type: "main_frame", initiator: "" }).headerRules
+    .flatMap((r) => (r.action.responseHeaders || []).map((h) => h.value))
+    .find((v) => v.startsWith("script-src"));
+  assert.ok(bankCsp.includes("'sha256-AbC123=='"), bankCsp);
+
+  const otherCsp = evaluate(rules, { domain: "other.example", type: "main_frame", initiator: "" }).headerRules
+    .flatMap((r) => (r.action.responseHeaders || []).map((h) => h.value))
+    .find((v) => v.startsWith("script-src"));
+  assert.ok(!otherCsp.includes("'sha256-AbC123=='"), otherCsp);
 });
 
 /* ------------------------------------------------------------------ *

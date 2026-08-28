@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.13.1 — 2026-08-28
+
+### Fixed
+- **Popup matrix no longer leaks other sites' policy targets.** The matrix's
+  domain list was pulling policy-target rows from every scope the extension
+  had ever stored a site policy for (i.e. every site you've configured, not
+  just the current one), because the background state hands the popup the
+  full cross-site `sitePolicies` store and the matrix builder iterated all of
+  it unconditionally. A domain blocked on one site could show up as a row on
+  an unrelated site's matrix even though it never appeared in that site's
+  traffic. The matrix now only pulls policy targets from scopes in the
+  current page's actual chain (global + this registrable domain +
+  subdomains).
+
+### Added
+- **"Only observed" toggle** in the popup toolbar: filters the matrix down to
+  rows that were actually seen in the current page's live scan, hiding
+  history- and policy-only rows (e.g. a global rule for a domain that simply
+  didn't load on this page) on demand. Off by default; state resets each time
+  the popup opens.
+- **New per-scope switch: `strip-tracking-params`.** Redirects navigations to
+  drop known click/campaign query params (`utm_*`, `fbclid`, `gclid`,
+  `msclkid`, etc. — see `TRACKING_PARAMS` in `src/lib/dnrCompiler.js`) via
+  DNR's `redirect.transform.queryTransform`. Scoped to `main_frame`/
+  `sub_frame` only, never subresource requests, since query params on
+  script/XHR calls are often functionally significant. Its priority sits
+  just below `https-upgrade` on purpose: both are redirect-family DNR
+  actions and only one can win per request, so an http:// link with tracking
+  params gets upgraded first (params intact on that one internal hop); the
+  resulting https:// request no longer matches the upgrade rule, so
+  tracking-param stripping fires on that second pass instead. Net effect is
+  correct either way.
+- **CSP hash allowlist for `no-inline-script`.** That switch blocks *all*
+  inline `<script>` execution, which is often too blunt for real sites. You
+  can now allowlist specific known-good inline scripts by their exact
+  `'sha256-...'`/`'sha384-...'`/`'sha512-...'` content hash (Chrome's own
+  console error for a blocked inline script prints the hash to use), scoped
+  per-site like the switch itself. Nonces are intentionally not supported:
+  they're meant to rotate every page load, but this compiles into a static
+  DNR header-append rule that can't read the response body to learn the
+  current nonce, so only a stable content hash is actually usable here.
+  Editable from a small chip list under the switches bar once
+  `no-inline-script` is on for the current scope.
+
 ## 0.12.0 — 2026-08-03
 
 ### UI

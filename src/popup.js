@@ -18,7 +18,7 @@
 import { canonicalHost, registrableDomain as pslRegistrableDomain } from "./lib/domains.js";
 import {
   GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD, SWITCH_NAMES, PRIORITY,
-  resolveOutcome
+  resolveOutcome, scopeChainFor
 } from "./lib/dnrCompiler.js";
 
 // Leading "All" column = the type-"*" cell of each row.
@@ -42,14 +42,16 @@ const SWITCH_LABELS = {
   "no-inline-script": "No inline scripts",
   "no-worker": "No workers",
   "strip-referrer": "Strip referrer",
-  "https-upgrade": "HTTPS upgrade"
+  "https-upgrade": "HTTPS upgrade",
+  "strip-tracking-params": "Strip tracking params"
 };
 const SWITCH_HINTS = {
   "matrix-off": "Persistent kill switch: the whole frame tree of this scope bypasses every VIGIL rule.",
-  "no-inline-script": "Injects a CSP header that blocks inline <script> and inline event handlers.",
+  "no-inline-script": "Injects a CSP header that blocks inline <script> and inline event handlers. Turn on to allowlist specific inline scripts by content hash below.",
   "no-worker": "Injects a CSP header (worker-src 'none') that blocks Web/Shared/Service workers.",
   "strip-referrer": "Removes the Referer header from requests in this scope.",
-  "https-upgrade": "Upgrades http:// requests in this scope to https://."
+  "https-upgrade": "Upgrades http:// requests in this scope to https://.",
+  "strip-tracking-params": "Drops known click/campaign query params (utm_*, fbclid, gclid, ...) from navigation URLs in this scope."
 };
 
 const DEFAULT_CLASSIFICATION = {
@@ -78,6 +80,7 @@ let scopeMode = "domain";     // "global" | "domain" | "host"
 let matchesOpen = false;
 let isSidePanel = false;
 let legendOpen = false;
+let onlyObserved = false;
 const expandedGroups = new Set(); // registrable domains with hostname rows shown
 
 const $ = (id) => document.getElementById(id);
@@ -115,6 +118,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("blockThirdPartyFrames").addEventListener("click", guard(() => bulkBlock("sub_frame")));
   $("applySuggestedBlocks").addEventListener("click", guard(applySuggestedBlocks));
   $("applyPolicyPack").addEventListener("click", guard(applySelectedPolicyPack));
+  $("onlyObserved").addEventListener("click", () => {
+    onlyObserved = !onlyObserved;
+    render();
+  });
   $("trustSite").addEventListener("click", guard(toggleTrustSite));
   $("showMatches").addEventListener("click", guard(toggleMatchedRules));
   $("exportPolicy").addEventListener("click", guard(exportPolicy));
@@ -347,9 +354,14 @@ function buildMatrixGroups() {
     }
   }
 
-  // 3) Policy targets visible from this page's scope chain (any scope).
+  // 3) Policy targets visible from this page's scope chain: global plus this
+  // site's own scopes only. mergedPoliciesView() carries every scope the
+  // extension has EVER seen a policy for (across all sites), so it must be
+  // walked through the actual chain here rather than iterated wholesale, or
+  // an unrelated site's blocked domains would bleed into this page's matrix.
   const view = mergedPoliciesView();
-  for (const targetPolicy of Object.values(view)) {
+  for (const scope of scopeChainFor(rawSourceDomain, suffixSet)) {
+    const targetPolicy = view[scope];
     for (const target of Object.keys(targetPolicy || {})) {
       if (target === TARGET_WILDCARD) continue; // wildcard row = header row
       const domain = registrableDomain(target);
@@ -436,7 +448,8 @@ function activeSwitchCountForPage() {
 function render() {
   const committedPolicy = getCommittedPolicy();
   const groups = buildMatrixGroups();
-  const domains = Array.from(groups.keys()).sort(domainSort);
+  const allDomains = Array.from(groups.keys()).sort(domainSort);
+  const domains = onlyObserved ? allDomains.filter((d) => !groups.get(d).historical) : allDomains;
   const mode = defaultModeOf();
 
   const dirty = !deepEqual(workingPolicy, committedPolicy);
@@ -453,7 +466,9 @@ function render() {
   const quotaWarn = dynPct >= 80 || state.sessionRuleCount / sesLimit >= 0.8;
 
   const sourceNote = rawSourceDomain === sourceDomain ? sourceDomain : `${rawSourceDomain} → ${sourceDomain}`;
-  $("site").textContent = `${sourceNote} — ${domains.length} resource domains (scan + history)`;
+  $("site").textContent = onlyObserved
+    ? `${sourceNote} — ${domains.length} of ${allDomains.length} resource domains (observed on this page only)`
+    : `${sourceNote} — ${domains.length} resource domains (scan + history)`;
   $("summary").innerHTML = `
     <span>Saved DNR: <strong>${state.dynamicRuleCount}</strong>/${dynLimit}</span>
     <span>Temporary DNR: <strong>${state.sessionRuleCount}</strong>/${sesLimit}</span>
@@ -500,6 +515,9 @@ function render() {
   $("trustSite").textContent = trusted ? "Untrust site" : "Trust site (temp)";
   $("trustSite").title = "Temporary allowAllRequests for this site's frame tree. Bypasses all VIGIL rules until untrusted or browser restart. For a persistent version use the Matrix off switch.";
 
+  $("onlyObserved").classList.toggle("active", onlyObserved);
+  $("onlyObserved").textContent = onlyObserved ? "Only observed ✓" : "Only observed";
+
   renderSwitches(scopeKey);
   renderMatrixTable(groups, domains);
 }
@@ -530,6 +548,74 @@ function renderSwitches(scopeKey) {
     }));
     container.appendChild(chip);
   }
+
+  // CSP hash allowlist only makes sense once no-inline-script is actually
+  // on for this scope - it has nothing to attach to otherwise.
+  if (flags["no-inline-script"]) container.appendChild(renderCspHashEditor(scopeKey));
+}
+
+/*
+ * Per-scope inline-script hash allowlist for no-inline-script. Chrome's own
+ * console error for a blocked inline script prints the exact 'sha256-...'
+ * token to paste here - see cspNoInlineValue()'s doc comment for why nonces
+ * aren't supported instead.
+ */
+function renderCspHashEditor(scopeKey) {
+  const wrap = document.createElement("span");
+  wrap.className = "cspHashEditor";
+
+  const label = document.createElement("span");
+  label.className = "muted";
+  label.textContent = "Allowed inline-script hashes:";
+  wrap.appendChild(label);
+
+  const hashes = (state.cspAllowlist || {})[scopeKey] || [];
+  for (const hash of hashes) {
+    const chip = document.createElement("span");
+    chip.className = "cspHashChip";
+    chip.title = "Allowlisted inline-script hash for this scope";
+    const text = document.createElement("span");
+    text.className = "cspHashText";
+    text.textContent = hash;
+    chip.appendChild(text);
+    const remove = document.createElement("button");
+    remove.className = "cspHashRemove";
+    remove.textContent = "×";
+    remove.title = "Remove this hash";
+    remove.addEventListener("click", guard(async () => {
+      await send({ type: "SET_CSP_HASH", payload: { scope: scopeKey, hash, on: false } });
+      state = await send({ type: "GET_STATE" });
+      render();
+    }));
+    chip.appendChild(remove);
+    wrap.appendChild(chip);
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "cspHashInput";
+  input.placeholder = "'sha256-...'";
+  input.title = "Paste the 'sha256-...' / 'sha384-...' / 'sha512-...' token from Chrome's blocked-inline-script console error.";
+
+  const addHash = guard(async () => {
+    const hash = input.value.trim();
+    if (!hash) return;
+    await send({ type: "SET_CSP_HASH", payload: { scope: scopeKey, hash, on: true } });
+    input.value = "";
+    state = await send({ type: "GET_STATE" });
+    render();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") addHash();
+  });
+
+  const addButton = document.createElement("button");
+  addButton.textContent = "Add hash";
+  addButton.addEventListener("click", addHash);
+
+  wrap.appendChild(input);
+  wrap.appendChild(addButton);
+  return wrap;
 }
 
 function renderMatrixTable(groups, domains) {
@@ -986,6 +1072,8 @@ function renderMatch(match) {
     else reason = `Modified headers for ${target}.`;
   } else if (match.action === "upgradeScheme") {
     reason = `Upgraded an http:// request to https:// (${scope} https-upgrade switch).`;
+  } else if (match.action === "redirect") {
+    reason = `Stripped tracking params from ${target} (${scope} strip-tracking-params switch).`;
   } else if (match.action === "allowAllRequests") {
     reason = match.priority >= PRIORITY.TRUST_SITE
       ? `Trusted frame tree for ${target} (temporary trust).`

@@ -65,6 +65,7 @@ button {
 button:hover:not(:disabled) { border-color: #566174; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button:focus-visible { outline: 2px solid #7aa2f7; outline-offset: 1px; }
+button.active { border-color: #7aa2f7; background: #202b43; color: #c7d2fe; }
 
 .summary {
   justify-content: space-between;
@@ -138,6 +139,51 @@ button:focus-visible { outline: 2px solid #7aa2f7; outline-offset: 1px; }
 }
 .switchChip.on { border-color: #7aa2f7; background: #202b43; color: #c7d2fe; }
 .switchChip.danger.on { border-color: #d3a533; background: #43310f; color: #ffd27a; }
+
+.cspHashEditor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cspHashChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #202b43;
+  color: #c7d2fe;
+}
+.cspHashText {
+  font-family: monospace;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cspHashRemove {
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 999px;
+}
+.cspHashRemove:hover { background: #33415f; }
+.cspHashInput {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  width: 160px;
+}
 
 /* ---------------- matrix: the one scroll container ---------------- */
 

@@ -33,6 +33,7 @@ import {
   compileCommittedRules, compileSessionRules, findSpecificityConflicts,
   validateSitePolicies, validateTargetPolicy, validateMatrixType,
   validateAction, validateDomain, validateScope, validateSwitches,
+  validateCspAllowlist, validateCspHash,
   isEmptyTargetPolicy, DEFAULT_MODES, normalizeDefaultMode
 } from "./lib/dnrCompiler.js";
 import { toAsciiDomain, isValidAsciiDomain } from "./lib/domains.js";
@@ -121,6 +122,7 @@ async function dispatch(message) {
     case "CLEAR_GLOBAL_POLICY": return clearGlobalPolicy();
     case "SET_SETTINGS": return setSettings(message.payload);
     case "SET_SWITCH": return setSwitch(message.payload);
+    case "SET_CSP_HASH": return setCspHash(message.payload);
     case "SET_BLOCKLIST": return setBlocklist(message.payload);
     case "SET_TRUSTED_SITE": return setTrustedSite(message.payload);
     case "RECORD_SCAN": return recordScan(message.payload);
@@ -139,7 +141,7 @@ async function dispatch(message) {
 
 async function ensureDefaultState() {
   const local = await chrome.storage.local.get(
-    ["sitePolicies", "globalPolicy", "policies", "switches", "settings", "observedDomains"]
+    ["sitePolicies", "globalPolicy", "policies", "switches", "cspAllowlist", "settings", "observedDomains"]
   );
 
   // v0.1/v0.2 migration: `policies` was the site-scoped policy store.
@@ -150,6 +152,7 @@ async function ensureDefaultState() {
   if (!local.sitePolicies) await chrome.storage.local.set({ sitePolicies: {} });
   if (!local.globalPolicy) await chrome.storage.local.set({ globalPolicy: {} });
   if (!local.switches) await chrome.storage.local.set({ switches: {} }); // v0.9
+  if (!local.cspAllowlist) await chrome.storage.local.set({ cspAllowlist: {} }); // v0.13
   if (!local.observedDomains) await chrome.storage.local.set({ observedDomains: {} });
 
   const defaults = {
@@ -179,8 +182,8 @@ async function ensureDefaultState() {
 
 async function getState() {
   await ensureDefaultState();
-  const { sitePolicies = {}, globalPolicy = {}, switches = {}, settings = {} } =
-    await chrome.storage.local.get(["sitePolicies", "globalPolicy", "switches", "settings"]);
+  const { sitePolicies = {}, globalPolicy = {}, switches = {}, cspAllowlist = {}, settings = {} } =
+    await chrome.storage.local.get(["sitePolicies", "globalPolicy", "switches", "cspAllowlist", "settings"]);
   const { draftSitePolicies = {}, draftGlobalPolicy = null, trustedSites = [] } =
     await draftStore.get(["draftSitePolicies", "draftGlobalPolicy", "trustedSites"]);
   const dynamicRules = await chrome.declarativeNetRequest.getDynamicRules();
@@ -196,6 +199,7 @@ async function getState() {
     sitePolicies,
     globalPolicy,
     switches,
+    cspAllowlist,
     draftSitePolicies,
     draftGlobalPolicy,
     trustedSites,
@@ -398,6 +402,31 @@ async function setSwitch(payload) {
 }
 
 /*
+ * Per-scope CSP hash allowlist for the no-inline-script switch: lets a scope
+ * allow specific known-good inline scripts by content hash instead of the
+ * switch being all-or-nothing. See cspNoInlineValue() for why nonces aren't
+ * supported here. Committed immediately, same as switches themselves.
+ */
+async function setCspHash(payload) {
+  const { scope, hash, on } = payload || {};
+  validateScope(scope, "csp allowlist scope");
+  validateCspHash(hash);
+
+  const { cspAllowlist = {} } = await chrome.storage.local.get(["cspAllowlist"]);
+  const list = new Set(cspAllowlist[scope] || []);
+  if (on) list.add(hash);
+  else list.delete(hash);
+  if (list.size > 0) cspAllowlist[scope] = Array.from(list).sort();
+  else delete cspAllowlist[scope];
+
+  validateCspAllowlist(cspAllowlist);
+  await chrome.storage.local.set({ cspAllowlist });
+
+  const dynamic = await compileAndApplyDynamicRules();
+  return { ok: true, cspAllowlist, dynamic };
+}
+
+/*
  * The static blocklist ruleset ships with the extension (see
  * tools/build-blocklist.mjs) and does not count against the dynamic quota.
  * Its rules use priority 5, so any explicit allow cell overrides them.
@@ -506,13 +535,14 @@ async function compileAllRules() {
 async function compileAndApplyDynamicRules() {
   await ensureDefaultState();
   const suffixes = await loadSuffixes();
-  const { sitePolicies = {}, globalPolicy = {}, switches = {}, settings = {} } =
-    await chrome.storage.local.get(["sitePolicies", "globalPolicy", "switches", "settings"]);
+  const { sitePolicies = {}, globalPolicy = {}, switches = {}, cspAllowlist = {}, settings = {} } =
+    await chrome.storage.local.get(["sitePolicies", "globalPolicy", "switches", "cspAllowlist", "settings"]);
 
   const addRules = compileCommittedRules({
     sitePolicies,
     globalPolicy,
     switches,
+    cspAllowlist,
     defaultMode: settings.defaultMode,
     suffixes
   });
@@ -682,8 +712,8 @@ function describeCurrent(store, rule) {
 
 async function exportState() {
   await ensureDefaultState();
-  const { sitePolicies = {}, globalPolicy = {}, switches = {}, settings = {} } =
-    await chrome.storage.local.get(["sitePolicies", "globalPolicy", "switches", "settings"]);
+  const { sitePolicies = {}, globalPolicy = {}, switches = {}, cspAllowlist = {}, settings = {} } =
+    await chrome.storage.local.get(["sitePolicies", "globalPolicy", "switches", "cspAllowlist", "settings"]);
   return {
     ok: true,
     export: {
@@ -693,6 +723,7 @@ async function exportState() {
       globalPolicy,
       sitePolicies,
       switches,
+      cspAllowlist,
       settings: { ...settings, normalizeToRegistrableDomain: "psl-lite", schemaVersion: SCHEMA_VERSION }
     }
   };
@@ -715,10 +746,12 @@ async function importState(payload) {
   }
   const globalPolicy = normalizeTargetPolicyDomains(rawGlobalPolicy);
   const switches = imported.switches || {};
+  const cspAllowlist = imported.cspAllowlist || {};
 
   validateSitePolicies(sitePolicies);
   validateTargetPolicy(globalPolicy);
   validateSwitches(switches);
+  validateCspAllowlist(cspAllowlist);
   await assertNoSpecificityConflicts({ sitePolicies, globalPolicy });
 
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
@@ -735,7 +768,7 @@ async function importState(payload) {
     defaultDeny: imported.settings?.defaultDeny
   });
   delete nextSettings.defaultDeny;
-  await chrome.storage.local.set({ sitePolicies, globalPolicy, switches, settings: nextSettings });
+  await chrome.storage.local.set({ sitePolicies, globalPolicy, switches, cspAllowlist, settings: nextSettings });
   await draftStore.set({ draftSitePolicies: {}, draftGlobalPolicy: null });
 
   await applyBlocklistSetting();
