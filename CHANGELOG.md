@@ -1,5 +1,13 @@
 # Changelog
 
+
+## 0.14.0 — 2026-09-11
+- Fix: matched-rules viewer showed an empty list because it read the wrong
+  field (info.ruleId instead of info.rule.ruleId) in resolveMatch and
+  getMatchedRules.
+- Fix: importing an old export with default-deny enabled now correctly
+  migrates to hard mode instead of silently keeping the current mode.
+
 ## 0.13.2 — 2026-08-28
 
 ### Added
