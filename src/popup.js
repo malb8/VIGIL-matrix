@@ -220,6 +220,7 @@ function populatePolicyPackSelector() {
 async function scanCurrentPage(tabId) {
   const injections = await chrome.scripting.executeScript({
     target: { tabId, allFrames: true },
+    injectImmediately: true,
     files: ["src/pageScan.js"]
   });
 
