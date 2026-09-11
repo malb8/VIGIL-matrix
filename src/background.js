@@ -764,7 +764,7 @@ async function importState(payload) {
   // Accept both a new export (settings.defaultMode) and an old one
   // (settings.defaultDeny), preferring whatever the import actually carried.
   nextSettings.defaultMode = normalizeDefaultMode({
-    defaultMode: imported.settings?.defaultMode ?? settings.defaultMode,
+    defaultMode: imported.settings?.defaultMode ?? (typeof imported.settings?.defaultDeny === "boolean" ? undefined : settings.defaultMode),
     defaultDeny: imported.settings?.defaultDeny
   });
   delete nextSettings.defaultDeny;
