@@ -640,11 +640,11 @@ function resolveMatch(snapshots, currentIndex, info) {
   for (const store of ["session", "dynamic"]) {
     const list = (snapshots?.[store] || []).filter((s) => s.ts <= ts);
     for (let i = list.length - 1; i >= 0; i--) {
-      const rule = list[i].rules.find((r) => r.id === info.ruleId);
+      const rule = list[i].rules.find((r) => r.id === info.rule.ruleId);
       if (rule) return { store: store === "session" ? "temporary" : "saved", rule };
     }
   }
-  return currentIndex.get(info.ruleId) || null;
+  return currentIndex.get(info.rule.ruleId) || null;
 }
 
 async function getMatchedRules(payload) {
@@ -674,7 +674,7 @@ async function getMatchedRules(payload) {
     .map((info) => ({ info, resolved: resolveMatch(ruleSnapshots, currentIndex, info) }))
     .filter(({ resolved }) => resolved)
     .map(({ info, resolved }) => ({
-      ruleId: info.ruleId,
+      ruleId: info.rule.ruleId,
       timeStamp: info.timeStamp,
       tabId: info.tabId,
       store: resolved.store,
