@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1 — 2026-09-11
+- Fix: the matrix could stay empty on slow-loading sites (e.g. Teslarati)
+  because the page scanner waited for a load-idle state that some pages never
+  reach. The scanner now injects immediately.
 
 ## 0.14.0 — 2026-09-11
 - Fix: matched-rules viewer showed an empty list because it read the wrong
