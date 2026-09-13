@@ -16,6 +16,7 @@
  *   the preview exactly matches the compiled DNR priority ladder.
  */
 import { canonicalHost, registrableDomain as pslRegistrableDomain } from "./lib/domains.js";
+import { explainOutcome, explanationLines, shouldRecommendBlock } from "./lib/policyExplanation.js";
 import {
   GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD, SWITCH_NAMES, PRIORITY,
   resolveOutcome, scopeChainFor
@@ -148,6 +149,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     event.preventDefault();
     guard(openSidePanel)();
   });
+  $("cellInspector").addEventListener("mouseleave", () => { $("cellInspector").hidden = true; });
+  $("matrix").addEventListener("scroll", () => { $("cellInspector").hidden = true; });
   await load();
 });
 
@@ -424,6 +427,32 @@ function effectiveOutcomeFor(target, resourceType) {
   });
 }
 
+function explanationContext(target, resourceType) {
+  return {
+    contextHost: rawSourceDomain, scope: currentScopeKey(), target, matrixType: resourceType,
+    policies: mergedPoliciesView(),
+    committedPolicies: { [GLOBAL_SCOPE]: state.globalPolicy || {}, ...(state.sitePolicies || {}) },
+    defaultMode: defaultModeOf(), suffixes: suffixSet,
+    switches: state.switches || {}, trustedSites: state.trustedSites || [],
+    blocklistEnabled: state.blocklistEnabled
+  };
+}
+
+function canRecommendBlock(target, resourceType) {
+  return shouldRecommendBlock(explanationContext(target, resourceType));
+}
+
+function showCellInspector(button, lines) {
+  const inspector = $("cellInspector");
+  inspector.textContent = lines.join("\n");
+  inspector.hidden = false;
+  const rect = button.getBoundingClientRect();
+  const width = inspector.offsetWidth;
+  const height = inspector.offsetHeight;
+  inspector.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+  inspector.style.top = `${Math.max(8, rect.bottom + height + 8 <= window.innerHeight ? rect.bottom + 4 : rect.top - height - 4)}px`;
+}
+
 async function cycleCellPolicy(target, resourceType, currentPolicy) {
   // Cookie column is block-only: noop -> block -> noop.
   const next = resourceType === "cookie"
@@ -463,6 +492,7 @@ function activeSwitchCountForPage() {
 }
 
 function render() {
+  $("cellInspector").hidden = true;
   const committedPolicy = getCommittedPolicy();
   const groups = buildMatrixGroups();
   const allDomains = Array.from(groups.keys()).sort(domainSort);
@@ -831,7 +861,20 @@ function cellButton(target, resourceType, { observed, seen }) {
 
   const btn = document.createElement("button");
   btn.className = "cellButton";
-  btn.title = buildCellTitle({ target, resourceType, working, committed, inherited, inheritedFrom, suggested, observed });
+  const explanation = explanationLines(explainOutcome(explanationContext(target, resourceType)), {
+    target, matrixType: resourceType, blocklistEnabled: state.blocklistEnabled
+  });
+  btn.title = explanation.join("\n") + "\n\n" + buildCellTitle({ target, resourceType, working, committed, inherited, inheritedFrom, suggested, observed });
+  btn.setAttribute("aria-label", `${target} · ${resourceType}. ${explanation.join(". ")}`);
+  btn.addEventListener("mouseenter", () => showCellInspector(btn, explanation));
+  btn.addEventListener("focus", () => showCellInspector(btn, explanation));
+  btn.addEventListener("mouseleave", (event) => {
+    if (document.activeElement !== btn && !$("cellInspector").contains(event.relatedTarget)) $("cellInspector").hidden = true;
+  });
+  btn.addEventListener("blur", () => { $("cellInspector").hidden = true; });
+  btn.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") $("cellInspector").hidden = true;
+  });
   const span = document.createElement("span");
   span.className = classes.join(" ");
   btn.appendChild(span);
@@ -912,11 +955,11 @@ function groupResources(resources) {
 
 function classifySuggestion({ target, resourceType }) {
   if (resourceType === TYPE_WILDCARD) return "neutral";
-  if (isKnownTrackerDomain(target) && HIGH_RISK_DEFAULT_TYPES.has(resourceType)) return "suggestBlock";
+  if (isKnownTrackerDomain(target) && HIGH_RISK_DEFAULT_TYPES.has(resourceType) && canRecommendBlock(target, resourceType)) return "suggestBlock";
   // Checked before the blanket same-site allow below: a cloak-flagged
   // target IS same-site by hostname, so it would otherwise fall into that
   // bucket and never get flagged.
-  if (looksLikeCloakedTracker(target) && HIGH_RISK_DEFAULT_TYPES.has(resourceType)) return "suggestCloak";
+  if (looksLikeCloakedTracker(target) && HIGH_RISK_DEFAULT_TYPES.has(resourceType) && canRecommendBlock(target, resourceType)) return "suggestCloak";
   if (isSameSite(target, sourceDomain) && resourceType !== "cookie") return "suggestAllow";
   return "neutral";
 }
@@ -928,7 +971,7 @@ function countSuggestedBlockCells(groups) {
     for (const [resourceType] of RESOURCE_COLUMNS) {
       if (!HIGH_RISK_DEFAULT_TYPES.has(resourceType)) continue;
       const seenOrCookie = resourceType === "cookie" ? Object.keys(group.aggregate).length > 0 : Boolean(group.aggregate[resourceType]);
-      if (seenOrCookie && workingPolicy[domain]?.[resourceType] !== "block") count += 1;
+      if (seenOrCookie && canRecommendBlock(domain, resourceType)) count += 1;
     }
   }
   return count;
@@ -1038,7 +1081,8 @@ async function applySuggestedBlocks() {
     if (!isKnownTrackerDomain(domain)) continue;
     for (const [resourceType] of RESOURCE_COLUMNS) {
       if (!HIGH_RISK_DEFAULT_TYPES.has(resourceType)) continue;
-      if (resourceType !== "cookie" && !group.aggregate[resourceType]) continue;
+      if (resourceType === "cookie" ? Object.keys(group.aggregate).length === 0 : !group.aggregate[resourceType]) continue;
+      if (!canRecommendBlock(domain, resourceType)) continue;
       setWorkingCellPolicy(domain, resourceType, "block");
     }
   }
@@ -1163,6 +1207,7 @@ async function exportPolicy() {
  * ------------------------------------------------------------------ */
 
 function setBusy(message) {
+  $("cellInspector").hidden = true;
   $("site").textContent = message;
   $("matrix").innerHTML = "";
   $("switches").innerHTML = "";

@@ -27,6 +27,7 @@ import {
   normalizeDefaultMode, defaultOutcomeFor, cspNoInlineValue, validateCspHash,
   DYNAMIC_RULE_BASE_ID
 } from "../src/lib/dnrCompiler.js";
+import { explainOutcome, shouldRecommendBlock } from "../src/lib/policyExplanation.js";
 import { parseRulesText, serializeRulesText, canonicalLines, diffRules } from "../src/lib/rulesText.js";
 
 /* ------------------------------------------------------------------ *
@@ -1028,4 +1029,42 @@ test("dynamic rules start at the reserved base ID", () => {
     suffixes: SUFFIXES
   });
   assert.equal(rules[0].id, DYNAMIC_RULE_BASE_ID);
+});
+
+// Compare inspector/recommendations with the existing DNR evaluator.
+test("inspector matches compiled Relaxed wildcard draft-removal enforcement", () => {
+  const committedPolicies = { "example.com": { "*": { "*": "block" } } };
+  const policies = { "example.com": {} };
+  const context = {
+    contextHost: "www.example.com", scope: "example.com", target: "tracker.test",
+    matrixType: "script", defaultMode: "relaxed", suffixes: SUFFIXES,
+    committedPolicies, policies
+  };
+  const rules = [
+    ...compileCommittedRules({ sitePolicies: committedPolicies, defaultMode: "relaxed", suffixes: SUFFIXES }),
+    ...compileSessionRules({ committedSitePolicies: committedPolicies, draftSitePolicies: policies,
+      defaultMode: "relaxed", suffixes: SUFFIXES })
+  ];
+  const enforced = evaluate(rules, { domain: context.target, initiator: context.contextHost, type: "script" });
+  assert.equal(enforced.outcome, "allowed");
+  const explained = explainOutcome(context);
+  assert.equal(explained.action, enforced.outcome === "blocked" ? "block" : "allow");
+  assert.equal(explained.source, "draft-removal");
+  assert.deepEqual(explained.coord, { scope: "example.com", target: "*", matrixType: "*" });
+});
+
+test("Hard cookie recommendation is suppressed when compiled enforcement is unchanged", () => {
+  const context = {
+    contextHost: "www.example.com", scope: "example.com", target: "tracker.test",
+    matrixType: "cookie", defaultMode: "hard", suffixes: SUFFIXES,
+    committedPolicies: {}, policies: {}
+  };
+  const dynamic = compileCommittedRules({ defaultMode: "hard", suffixes: SUFFIXES });
+  const session = compileSessionRules({ draftSitePolicies: {
+    "example.com": { "tracker.test": { cookie: "block" } }
+  }, defaultMode: "hard", suffixes: SUFFIXES });
+  const req = { domain: context.target, initiator: context.contextHost, type: "script" };
+  assert.equal(evaluate(dynamic, req).outcome, "blocked");
+  assert.deepEqual(evaluate([...dynamic, ...session], req), evaluate(dynamic, req));
+  assert.equal(shouldRecommendBlock(context), false);
 });

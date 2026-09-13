@@ -21,6 +21,13 @@ applying. The extension only wakes up when *you* open the popup or change a
 rule. Privacy and architecture are the same fact here: the extension cannot
 leak traffic it never possesses.
 
+## Starting protection
+
+New installations start in **Relaxed** mode with the bundled privacy blocklist
+enabled. Existing installations retain their selected mode and blocklist
+setting on update. Explicit matrix rules remain authoritative over the list;
+no recommendation is automatically turned into an authored cell.
+
 ## A page visit, step by step
 
 Say your policy contains two decisions for `wsj.com`:
@@ -31,12 +38,12 @@ scripts from `doubleclick.net` → **block**, and cookies to `piwik.pro` →
 e.g.:
 
 ```json
-{ "priority": 30, "action": { "type": "block" },
+{ "priority": 48, "action": { "type": "block" },
   "condition": { "initiatorDomains": ["wsj.com"],
                  "requestDomains": ["doubleclick.net"],
                  "resourceTypes": ["script"] } }
 
-{ "priority": 82, "action": { "type": "modifyHeaders",
+{ "priority": 318, "action": { "type": "modifyHeaders",
     "requestHeaders":  [{ "header": "cookie",     "operation": "remove" }],
     "responseHeaders": [{ "header": "set-cookie", "operation": "remove" }] },
   "condition": { "initiatorDomains": ["wsj.com"],
@@ -86,40 +93,57 @@ uMatrix resolved cell precedence in extension code, per request. VIGIL bakes
 precedence into the rule **priority number** once, at compile time:
 
 ```
-priority = 10 + scope*16 + target*4 + type*2 + draft
+priority = 10 + scope*32 + target*4 + type*2 + draft
 ```
 
-- scope: global (0) < registrable domain (1) < exact hostname (2)
-- target: `*` (0) < domain (1) < subdomain (2) < deeper (3)
+- scope: global (0), registrable domain (1), then real hostname depth (2–7)
+- target: `*` (0), registrable domain (1), then real hostname depth (2–7)
 - type: all-types cell (0) < specific type (1)
 - draft: saved (0) < temporary (1)
 
 Example: you block all scripts globally (the `*` header cell → priority 12)
 but allow scripts from `cdn.wsj.com` on this site (hostname target →
-priority ~36). Both rules match a request to `cdn.wsj.com`; the browser
+priority 52). Both rules match a request to `cdn.wsj.com`; the browser
 simply picks the higher number. The allow wins — exactly the uMatrix
 behavior, computed by Chrome's own evaluator instead of ours.
 
 The bands above the matrix are deliberate too: cookie-stripping rules
-(80–103) outrank every allow, so allowing a script can never silently
+(300–427) outrank every allow, so allowing a script can never silently
 re-enable its cookies. Switches (CSP injection, referrer stripping, HTTPS
 upgrade) sit higher still, and only the explicit kill switches
-(`matrix-off` at 300, temporary trust at 310) outrank everything.
+(`matrix-off` at 500, temporary trust at 510) outrank everything.
 
 ## Three default modes
 
 Everything above describes what happens to domains you have a rule for. The
 **default mode** (Options page) decides what happens to everything else — the
-request no matrix cell covers. **Open** (the default) blocks nothing: you opt
-in, cell by cell. **Relaxed** blocks the high-risk third-party subresources —
+request no matrix cell covers. **Open** blocks nothing by default: you opt in,
+cell by cell. **Relaxed** blocks the high-risk third-party subresources —
 scripts, frames, and XHR/fetch — and strips third-party cookies, while leaving
 first-party requests and third-party images, stylesheets, fonts and media
 alone; top-level navigation is never touched, so pages still load and mostly
-work. **Hard** is the uMatrix-style kill-everything default: every request type
-is blocked until you explicitly allow it. All three are just a rule at the very
-bottom of the priority ladder, so any allow cell you add overrides them — and
-relaxed leans on the browser's own first-vs-third-party classification, so
+work. **Hard** blocks every governed subresource type until you explicitly allow
+it; top-level navigation is still excluded. Network default blocks sit at the
+bottom of the priority ladder, so explicit allows override them. Relaxed cookie
+stripping has its own higher band and survives network allows.
+Relaxed leans on the browser's own first-vs-third-party classification, so
 VIGIL never has to see a request to know which side it's on.
+
+## Why a cell has its state
+
+Hover a cell or reach it with Tab to see its explanation. A normal click still
+cycles its state. The explanation identifies the winning explicit/inherited
+matrix rule or default mode, and distinguishes unsaved changes and removals.
+For example: “Blocked by matrix policy · Relaxed mode · third-party scripts”.
+Cookie removals warn that the saved strip remains until Save. Escape dismisses
+the overlay without editing the cell.
+
+This is the shared resolver's policy preview, not a log of actual requests.
+The bundled blocklist is separate: the inspector does not guess which requests
+it matched. Recommendations likewise avoid known redundant blocks and defer
+network suggestions with uncertain blocklist effects. Explicit allows are
+shown as allows even under Relaxed; a suggestion is offered only if a block
+in the selected scope would change the resolved answer.
 
 ## What each permission is doing in this story
 

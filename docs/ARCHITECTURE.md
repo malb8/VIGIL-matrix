@@ -5,6 +5,7 @@
 | File | Role |
 | --- | --- |
 | `src/lib/dnrCompiler.js` | Pure compiler: policies + switches → DNR rules. Also exports `resolveOutcome`, the inheritance resolver shared by the session neutralizers and the popup's cell preview. No `chrome.*`. |
+| `src/lib/policyExplanation.js` | Pure provenance and recommendation helpers that reuse `resolveOutcome`; no request observation or DNR changes. |
 | `src/lib/rulesText.js` | Pure "My rules" text format: parse / serialize / canonical lines / diff. No `chrome.*`. |
 | `src/lib/domains.js` | Canonical host, PSL-lite registrable domain, IDN→punycode. |
 | `src/background.js` | Service worker: state, storage, message dispatch (serialized), compile-and-apply, snapshots, history, blocklist toggling. |
@@ -12,7 +13,7 @@
 | `src/popup.js` / `popup.html` / `popup.css` | Matrix UI: 3 scopes, hostname hierarchy, `*` header row, All column, switch chips, matched-rules viewer. |
 | `src/options.js` / `options.html` | Default-mode radio (open/relaxed/hard) + blocklist toggle, My-rules editor with diff, JSON import/export. |
 | `tools/build-blocklist.mjs` | hosts-format → static DNR ruleset JSON. |
-| `data/static-blocklist.json` | Bundled static ruleset (disabled by default). |
+| `data/static-blocklist.json` | Bundled static ruleset (enabled by bootstrap on new installs). |
 | `test/compiler.test.mjs` | Node test suite with a miniature DNR evaluator. |
 
 ## Rule stores
@@ -62,6 +63,7 @@ Fixed bands above and below:
 | 299 | relaxed-mode third-party cookie strip (`modifyHeaders`) — above every matrix allow (≤265) so an allow can't suppress it, below every authored cookie cell (≥300) so explicit cookie rules stay authoritative |
 | 300–427 | cookie stripping (`modifyHeaders`) — above every allow so an allow can never suppress it |
 | 450–452 | strip-referrer (+ `switchScopeTier`, 0..2) |
+| 455–457 | strip-tracking-params (navigation redirect) |
 | 460–462 | https-upgrade (`upgradeScheme`) |
 | 470–472 / 476–478 | CSP no-inline-script / no-worker (`modifyHeaders` append) |
 | 500 | matrix-off (`allowAllRequests`, dynamic, persistent) |
@@ -76,10 +78,10 @@ temporary trust should do.
 `settings.defaultMode` decides what happens to a request no matrix cell covers.
 It replaces the old boolean default-deny (`defaultDeny: true` is still accepted
 as a legacy alias for `hard`, at every input boundary — settings patch, import,
-rules-text). All three modes sit at priority 1, so any explicit allow cell
-(≥ `MATRIX_BASE`) overrides them.
+rules-text). Default network blocks sit at priority 1, so explicit allow
+cells override them; Relaxed cookie stripping is separate, at priority 299.
 
-| Mode | Priority-1 rule(s) | Effect |
+| Mode | Base rule(s) | Effect |
 | --- | --- | --- |
 | `open` | none | Nothing blocked by default; you block explicitly. Behaves like pre-v0.11 with default-deny off. |
 | `relaxed` | `relaxedDenyRule` + `relaxedCookieStripRule` | Blocks only high-risk **third-party** subresources (`script`, `xmlhttprequest`/`websocket`/`ping`/`other`, `sub_frame`, `object`) via DNR's own `domainType: thirdParty`, and strips third-party cookies (priority 299). First-party requests and third-party images/CSS/fonts/media load. `main_frame` is never in either rule's `resourceTypes`, so top navigation is untouched. |
@@ -157,6 +159,37 @@ highest-priority non-noop cell. The popup uses the *same function* over a
 merged view (drafts overlaid, working policy substituted) for its inherited
 cell preview, so what you see is what compiles.
 
+## Cell explanations and recommendations (v0.14.2)
+
+`explainOutcome` calls `resolveOutcome` with the same merged view as the popup
+preview. It decorates the returned action/coordinate with explicit, inherited,
+draft, removal, or default-mode provenance by comparing the committed view;
+it does not implement another network-rule priority ladder. Draft removals
+show the resolver's effective fallback. Wildcard summaries explicitly note
+that individual hosts and types can differ.
+
+Cookie blocks accumulate rather than compete with network allows. The helper
+projects only saved/draft cookie blocks onto the shared resolver's hostname
+matching, retaining saved blocks during draft removals. Relaxed cookie
+fallback uses the existing first/third-party default resolver. This describes
+configured header policy, not proof of header modification or cookie access.
+
+The inspector is a small overlay shown on hover and keyboard focus. Escape
+closes it; no click handler is replaced. Accessible cell labels carry the
+same explanation. It labels its answer as matrix/default policy, flags
+trust/matrix-off bypasses, and never invents static-list match attribution.
+Actual browser site access, frame initiators and other rules can affect a
+request; this is a policy preview, not a request log.
+
+`shouldRecommendBlock` uses that same result and resolves a hypothetical
+block in the selected scope: only allow → block changes qualify. Thus
+Relaxed/explicit blocks, bypasses and more-specific allows suppress redundant
+or ineffective suggestions. Counts, cell suggestions and Apply suggested
+blocks share this decision. Manual bulk commands and packs remain explicit
+user actions. When the static list is enabled and no explicit allow wins,
+network recommendations are conservatively deferred because the list's
+separate effect is unknown. Cookie recommendations remain separate.
+
 ## Switches
 
 Stored in `chrome.storage.local.switches[scope]`, committed immediately via
@@ -167,7 +200,8 @@ site scopes (a navigation's initiator is the previous page); https-upgrade uses
 
 ## Static blocklist
 
-Declared in the manifest (`rule_resources`, id `blocklist`, disabled). Options
+Declared in the manifest (`rule_resources`, id `blocklist`, initially disabled
+to preserve update behavior). Bootstrap enables it for new installs. Options
 toggles it with `updateEnabledRulesets`; the desired state persists in
 settings and is re-asserted at bootstrap. `tools/build-blocklist.mjs` converts
 hosts-format lists into chunked `requestDomains` block rules at priority 5.
@@ -192,6 +226,15 @@ breakdown for hostname rows; scans persist per site (200 sites, 80 targets,
 12 raw hosts per target, 30-day TTL) so blocked hosts remain visible.
 
 ## State & migrations
+
+Starting in v0.14.2, `onInstalled` passes `details.reason` through the existing
+serialized bootstrap to `ensureDefaultState`. Only reason `install` with no
+settings and no legacy/current site or global policy data seeds Relaxed mode
+and `blocklistEnabled: true`. The stored settings themselves are the guard:
+repeated install events, startup, updates and ordinary state reads do not
+reseed them. Existing modes and either blocklist boolean are preserved. Missing
+settings on update still use the old Open/disabled fallback. No schema bump or
+matrix cells are needed; legacy import semantics remain unchanged.
 
 `schemaVersion 6`: adds `switches` (local) and `settings.blocklistEnabled`;
 site policy keys may now be hostnames and targets may be `*`/hostnames, types

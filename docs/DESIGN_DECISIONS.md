@@ -42,7 +42,7 @@ previews. What you see is literally what compiles.
 
 ## D5 — Cookie stripping above every allow
 Chrome suppresses a `modifyHeaders` rule when an allow of equal/higher
-priority matches. Cookie rules therefore occupy a band (80–103) above all
+priority matches. Cookie rules therefore occupy a band (300–427) above all
 matrix priorities, so allowing a script can never silently re-enable its
 cookies.
 **Trade-off:** a draft cannot neutralize a committed cookie block (an allow
@@ -89,3 +89,20 @@ a few files with no generated code.
 version-controllable; the serializer is canonical (sorted) so two equal
 policies always produce identical text. JSON export remains for full-state
 backup.
+
+## D13 — Useful defaults only for new installations (v0.14.2)
+New users start in Relaxed mode with the bundled blocklist enabled. A protection
+extension should offer useful protection before the user learns its matrix.
+Existing users are never silently migrated to stronger settings; explicit user
+policy remains authoritative. Only the initial install event with absent
+settings/policy data seeds defaults. Stored settings prevent reseeding.
+**Trade-off:** some sites may need explicit allows. Relaxed itself is unchanged;
+third-party images, stylesheets, fonts and media are not generically blocked.
+
+## D14 — Explain the shared resolver, not guessed traffic
+Hover/focus explanations decorate `resolveOutcome` with provenance. Suggestions
+use it both before and after a proposed block to avoid redundant or ineffective
+rules. Normal cell clicks continue editing.
+**Trade-off:** static-list attribution is deferred, and uncertain list-dependent
+suggestions are withheld. Explanations describe matrix/default policy and
+configured cookie stripping, not verified request outcomes.

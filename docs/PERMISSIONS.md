@@ -3,6 +3,15 @@
 Every permission in `manifest.json`, and why it exists. The guiding rule:
 if a permission cannot be justified in one paragraph here, it gets removed.
 
+## v0.14.2
+
+No permissions are added. Fresh-install defaults use the existing local storage
+and DNR ruleset APIs; the cell inspector and recommendations use pure local
+policy resolution. They neither query live traffic nor require feedback API
+calls. Header modification and redirects remain subject to the browser's site
+access requirements; an inspector policy label is not proof that a header was
+modified. The release does not broaden access to address that limitation.
+
 ## `declarativeNetRequest`
 
 The core of the extension. All enforcement — blocking, allowing, cookie and
@@ -27,8 +36,8 @@ without the viewer, this permission can be dropped.
 ## `activeTab` + `scripting`
 
 The page scanner (`src/pageScan.js`) is injected **only when you open the
-popup or side panel**, **only into the tab you are looking at** (all frames
-of it). It reads resource *URLs* (via the Performance API and DOM element
+popup or side panel**, **only into the tab you are looking at** (frames the browser permits
+access to). It reads resource *URLs* (via the Performance API and DOM element
 attributes) to populate matrix rows — never page text or form input.
 `activeTab` grants temporary access to the current tab on user gesture;
 `scripting` provides the `executeScript` API. VIGIL requests **no** `<all_urls>`

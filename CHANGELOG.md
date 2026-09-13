@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.2 — 2026-09-11
+
+- New installations start in Relaxed protection mode with the bundled privacy
+  blocklist enabled. Existing installations keep their mode and blocklist settings.
+- Hovering or focusing a matrix cell explains its matrix/default policy, the
+  winning rule, inheritance, and unsaved changes. Normal clicks still edit cells.
+- Recommendations skip blocks already supplied by Relaxed or explicit rules,
+  and blocks that cannot win in the selected scope. Suggestions with uncertain
+  static-blocklist effects are deferred; no blocklist attribution is guessed.
+
 ## 0.14.1 — 2026-09-11
 - Fix: the matrix could stay empty on slow-loading sites (e.g. Teslarati)
   because the page scanner waited for a load-idle state that some pages never

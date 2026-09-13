@@ -383,3 +383,20 @@ tr.hostRow .thirdParty, tr.hostRow .sameSite, tr.hostRow .trackerDomain, tr.host
 /* Wildcard header row cells */
 th .cellButton { display: flex; margin: 2px auto 0; }
 th.domainHead { color: var(--text); }
+
+.cellInspector {
+  position: fixed;
+  z-index: 40;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid #566174;
+  border-radius: 6px;
+  background: #20242d;
+  color: var(--text);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+}
+.cellInspector[hidden] { display: none; }

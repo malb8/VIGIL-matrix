@@ -88,17 +88,17 @@ function loadSuffixes() {
  * Lifecycle
  * ------------------------------------------------------------------ */
 
-async function bootstrap() {
+async function bootstrap(details = {}) {
   await chrome.declarativeNetRequest.setExtensionActionOptions({
     displayActionCountAsBadgeText: true
   });
-  await ensureDefaultState();
+  await ensureDefaultState(details.reason);
   await applyBlocklistSetting();
   await compileAndApplyDynamicRules();
   await compileAndApplySessionRules();
 }
 
-chrome.runtime.onInstalled.addListener(() => serialize(bootstrap));
+chrome.runtime.onInstalled.addListener((details) => serialize(() => bootstrap(details)));
 chrome.runtime.onStartup?.addListener(() => serialize(bootstrap));
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -139,7 +139,7 @@ async function dispatch(message) {
  * State
  * ------------------------------------------------------------------ */
 
-async function ensureDefaultState() {
+async function ensureDefaultState(installationReason) {
   const local = await chrome.storage.local.get(
     ["sitePolicies", "globalPolicy", "policies", "switches", "cspAllowlist", "settings", "observedDomains"]
   );
@@ -155,11 +155,13 @@ async function ensureDefaultState() {
   if (!local.cspAllowlist) await chrome.storage.local.set({ cspAllowlist: {} }); // v0.13
   if (!local.observedDomains) await chrome.storage.local.set({ observedDomains: {} });
 
+  const freshInstall = installationReason === "install" && !local.settings
+    && !local.policies && !local.sitePolicies && !local.globalPolicy;
   const defaults = {
     defaultCellState: "noop",
     normalizeToRegistrableDomain: "psl-lite",
-    defaultMode: "open",
-    blocklistEnabled: false,
+    defaultMode: freshInstall ? "relaxed" : "open",
+    blocklistEnabled: freshInstall,
     schemaVersion: SCHEMA_VERSION
   };
   if (!local.settings) {

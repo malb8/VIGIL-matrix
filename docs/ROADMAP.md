@@ -1,7 +1,14 @@
 # Roadmap
 
-Status: v0.12 (experimental research preview). Items are intentions, not
+Status: v0.14.2 (experimental research preview). Items are intentions, not
 promises; ordering reflects current priority.
+
+## Delivered in v0.14.2
+- Relaxed + bundled-blocklist defaults for new installs; existing choices preserved.
+- Hover/focus cell explanations using the shared resolver, with unchanged clicks.
+- Effective-policy recommendations that suppress redundant or ineffective blocks.
+- Detailed static-blocklist attribution remains deferred; no network observation
+  or new permissions were added.
 
 ## v1.0 — publication hardening
 - Repository governance complete (this docs set) and CI running the node
