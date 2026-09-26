@@ -2,6 +2,10 @@
 
 ## 0.15.0 — 2026-09-26
 
+- Show nonzero current-scan resource counts in matrix resource-type cells.
+  All and Cookie cells remain without counts. Counts describe observed resources,
+  not blocked or allowed requests; policy colours and cell controls are unchanged.
+
 - Matrix-cell explanations now open on focus instead of mouse hover; ordinary
   clicks and keyboard controls remain unchanged.
 - Protected browser pages show a concise explanation instead of a raw scripting error.

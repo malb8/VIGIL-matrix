@@ -867,7 +867,10 @@ function cellButton(target, resourceType, { observed, seen }) {
     target, matrixType: resourceType, blocklistEnabled: state.blocklistEnabled
   });
   btn.title = explanation.join("\n") + "\n\n" + buildCellTitle({ target, resourceType, working, committed, inherited, inheritedFrom, suggested, observed });
-  btn.setAttribute("aria-label", `${target} · ${resourceType}. ${explanation.join(". ")}`);
+  const observedCount = resourceType !== TYPE_WILDCARD && resourceType !== "cookie"
+    && observed?.count > 0 ? observed.count : 0;
+  const observedLabel = observedCount ? ` Observed resources: ${observedCount}.` : "";
+  btn.setAttribute("aria-label", `${target} · ${resourceType}. ${explanation.join(". ")}${observedLabel}`);
   btn.addEventListener("focus", () => showCellInspector(btn, explanation));
   btn.addEventListener("blur", () => { $("cellInspector").hidden = true; });
   btn.addEventListener("keydown", (event) => {
@@ -875,6 +878,11 @@ function cellButton(target, resourceType, { observed, seen }) {
   });
   const span = document.createElement("span");
   span.className = classes.join(" ");
+  if (observedCount) {
+    span.classList.add("observedCount");
+    span.textContent = String(observedCount);
+    span.setAttribute("aria-hidden", "true");
+  }
   btn.appendChild(span);
   btn.addEventListener("click", guard(() => cycleCellPolicy(target, resourceType, working)));
   return btn;

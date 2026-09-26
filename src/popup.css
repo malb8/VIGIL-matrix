@@ -331,9 +331,20 @@ tbody tr.hostRow td { background: var(--row-host); }
   background: repeating-linear-gradient(135deg, var(--suggest-cloak), var(--suggest-cloak) 3px, #6a4d1f 3px, #6a4d1f 6px);
   border-color: #b8872a;
 }
-/* Density encoding replaces in-cell counts: no observed activity for this
-   (target, type) pair dims the cell's state rather than drawing a number.
-   Exact counts remain in the tooltip. Applies uniformly to every state. */
+/* Counts describe resources in the current scan, not enforcement outcomes.
+   Let large counts grow rather than clipping or abbreviating their value. */
+.cell.observedCount {
+  width: auto;
+  min-width: 16px;
+  padding: 0 2px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px #000;
+}
+/* Cells without current or historical observations retain their dimmed state. */
 .cell.unseen { opacity: .55; }
 .cell.dirty {
   box-shadow: 0 0 0 2px var(--pending);

@@ -1,12 +1,16 @@
 # Roadmap
 
-Status: v0.15.0 package prepared (experimental research preview); store
-publication pending. Items are intentions, not promises; ordering reflects current
-priority.
+Status: v0.15.0 replacement package prepared with observed cell counts
+(experimental research preview); store publication pending. Items are intentions,
+not promises; ordering reflects current priority.
 
 ## v0.15.0 — focused popup and release hardening
 
 ### Completed for v0.15.0
+
+- Show nonzero current-scan resource counts in resource-type cells, with
+  accessible count labels. All and Cookie remain without counts. The maintainer
+  confirmed the layout; counts are observations, not enforcement outcomes.
 
 - Make cell explanations focus-driven: mouse hover no longer opens or updates
   the inspector; keyboard focus, Escape/blur handling and normal cell clicks
@@ -28,7 +32,7 @@ priority.
   video sites in Open, Relaxed and Hard modes.
 - Complete the remaining popup accessibility checks: ARIA labels and
   screen-reader output.
-- Run the full Node test suite and the store-submission checklist. Existing
+- Complete the store-submission checklist. Existing
   installs must retain their selected mode, blocklist setting and policies.
 
 ### v0.15.0 constraints
@@ -40,9 +44,9 @@ priority.
 ## Store release track
 
 - Edge Add-ons review is pending.
-- Chrome Web Store publication remains open: create or finish the listing,
-  publish the privacy-policy URL and single-purpose statement, upload the
-  verified v0.15.0 package and complete review.
+- The earlier v0.15.0 package was submitted to Chrome Web Store. A replacement
+  v0.15.0 package with cell counts is ready for submission to Chrome and Edge;
+  submission of the replacement is not yet confirmed.
 - Keep store copy and screenshots aligned between Chrome Web Store and Edge
   Add-ons. Both stores use the same MV3 package.
 
