@@ -13,7 +13,7 @@ Instead of intercepting requests with the (no longer blocking-capable)
 Everything runs locally: no backend, no telemetry, no remote code, no remote
 lists fetched at runtime.
 
-> **Status: experimental research preview (v0.14.2).**
+> **Status: experimental research preview (v0.15.0).**
 > Audience: advanced users, security architects, browser security researchers.
 > Goal: MV3-native, matrix-based, explainable request policy control.
 > Non-goals: full uMatrix compatibility, mass-market ad blocking, guaranteed
@@ -23,8 +23,8 @@ lists fetched at runtime.
 
 - **Useful starting defaults**: new installs use Relaxed mode plus the bundled
   blocklist. Updates preserve all existing mode and blocklist choices.
-- **Cell explanations**: hover or focus to see the winning matrix/default
-  policy and unsaved changes. Clicks still edit cells.
+- **Cell explanations**: focus a cell to see the winning matrix/default policy
+  and unsaved changes. Clicks still edit cells.
 - **Policy matrix** with three scope levels (global `*`, registrable domain,
   full hostname) and a hostname hierarchy in the rows: a rule on
   `cdn.example.com` overrides a rule on `example.com` for that host.

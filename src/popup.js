@@ -16,6 +16,7 @@
  *   the preview exactly matches the compiled DNR priority ladder.
  */
 import { canonicalHost, registrableDomain as pslRegistrableDomain } from "./lib/domains.js";
+import { isProtectedBrowserPage, popupLoadErrorMessage, PROTECTED_PAGE_MESSAGE } from "./lib/popupErrors.js";
 import { explainOutcome, explanationLines, shouldRecommendBlock } from "./lib/policyExplanation.js";
 import {
   GLOBAL_SCOPE, TARGET_WILDCARD, TYPE_WILDCARD, SWITCH_NAMES, PRIORITY,
@@ -149,7 +150,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     event.preventDefault();
     guard(openSidePanel)();
   });
-  $("cellInspector").addEventListener("mouseleave", () => { $("cellInspector").hidden = true; });
   $("matrix").addEventListener("scroll", () => { $("cellInspector").hidden = true; });
   await load();
 });
@@ -176,7 +176,9 @@ async function load() {
 
     [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!currentTab?.id || !/^https?:/i.test(currentTab.url || "")) {
-      renderError("Open an http(s) page, then open VIGIL Matrix Lite again.");
+      renderError(isProtectedBrowserPage(currentTab?.url)
+        ? PROTECTED_PAGE_MESSAGE
+        : "Open an http(s) page, then open VIGIL Matrix Lite again.");
       return;
     }
 
@@ -190,7 +192,7 @@ async function load() {
     setWorkingPolicyFromState();
     render();
   } catch (error) {
-    renderError(String(error?.message || error));
+    renderError(popupLoadErrorMessage(error, currentTab?.url));
   }
 }
 
@@ -866,11 +868,7 @@ function cellButton(target, resourceType, { observed, seen }) {
   });
   btn.title = explanation.join("\n") + "\n\n" + buildCellTitle({ target, resourceType, working, committed, inherited, inheritedFrom, suggested, observed });
   btn.setAttribute("aria-label", `${target} · ${resourceType}. ${explanation.join(". ")}`);
-  btn.addEventListener("mouseenter", () => showCellInspector(btn, explanation));
   btn.addEventListener("focus", () => showCellInspector(btn, explanation));
-  btn.addEventListener("mouseleave", (event) => {
-    if (document.activeElement !== btn && !$("cellInspector").contains(event.relatedTarget)) $("cellInspector").hidden = true;
-  });
   btn.addEventListener("blur", () => { $("cellInspector").hidden = true; });
   btn.addEventListener("keydown", (event) => {
     if (event.key === "Escape") $("cellInspector").hidden = true;

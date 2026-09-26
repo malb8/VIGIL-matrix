@@ -37,6 +37,8 @@ import {
   isEmptyTargetPolicy, DEFAULT_MODES, normalizeDefaultMode
 } from "./lib/dnrCompiler.js";
 import { toAsciiDomain, isValidAsciiDomain } from "./lib/domains.js";
+import { runPolicyApplyTransaction } from "./lib/policyApplyTransaction.js";
+import { resolveRulesTextApplyState } from "./lib/rulesText.js";
 
 const SCHEMA_VERSION = 8; // v0.11: settings.defaultMode ("open"|"relaxed"|"hard") replaces boolean defaultDeny
 const draftStore = chrome.storage.session;
@@ -47,6 +49,8 @@ const OBSERVED_MAX_RAW_HOSTS = 12;
 const OBSERVED_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const SNAPSHOT_HISTORY = 6;
 const BLOCKLIST_RULESET_ID = "blocklist";
+const POLICY_LOCAL_KEYS = ["sitePolicies", "globalPolicy", "switches", "cspAllowlist", "settings"];
+const POLICY_SESSION_KEYS = ["draftSitePolicies", "draftGlobalPolicy", "trustedSites", "ruleSnapshots"];
 
 /* ------------------------------------------------------------------ *
  * Serialized operation queue (compile mutex)
@@ -112,27 +116,85 @@ async function dispatch(message) {
   if (!message || !message.type) return null;
   switch (message.type) {
     case "GET_STATE": return getState();
-    case "APPLY_DRAFT_SITE_POLICY": return applyDraftSitePolicy(message.payload);
-    case "APPLY_DRAFT_GLOBAL_POLICY": return applyDraftGlobalPolicy(message.payload);
-    case "COMMIT_SITE_POLICY": return commitSitePolicy(message.payload);
-    case "COMMIT_GLOBAL_POLICY": return commitGlobalPolicy(message.payload);
-    case "REVERT_SITE_POLICY": return revertSitePolicy(message.payload);
-    case "REVERT_GLOBAL_POLICY": return revertGlobalPolicy();
-    case "CLEAR_SITE_POLICY": return clearSitePolicy(message.payload);
-    case "CLEAR_GLOBAL_POLICY": return clearGlobalPolicy();
-    case "SET_SETTINGS": return setSettings(message.payload);
-    case "SET_SWITCH": return setSwitch(message.payload);
-    case "SET_CSP_HASH": return setCspHash(message.payload);
+    case "APPLY_DRAFT_SITE_POLICY": return transactionalPolicyUpdate(() => applyDraftSitePolicy(message.payload));
+    case "APPLY_DRAFT_GLOBAL_POLICY": return transactionalPolicyUpdate(() => applyDraftGlobalPolicy(message.payload));
+    case "COMMIT_SITE_POLICY": return transactionalPolicyUpdate(() => commitSitePolicy(message.payload));
+    case "COMMIT_GLOBAL_POLICY": return transactionalPolicyUpdate(() => commitGlobalPolicy(message.payload));
+    case "REVERT_SITE_POLICY": return transactionalPolicyUpdate(() => revertSitePolicy(message.payload));
+    case "REVERT_GLOBAL_POLICY": return transactionalPolicyUpdate(() => revertGlobalPolicy());
+    case "CLEAR_SITE_POLICY": return transactionalPolicyUpdate(() => clearSitePolicy(message.payload));
+    case "CLEAR_GLOBAL_POLICY": return transactionalPolicyUpdate(() => clearGlobalPolicy());
+    case "SET_SETTINGS": return transactionalPolicyUpdate(() => setSettings(message.payload));
+    case "SET_SWITCH": return transactionalPolicyUpdate(() => setSwitch(message.payload));
+    case "SET_CSP_HASH": return transactionalPolicyUpdate(() => setCspHash(message.payload));
     case "SET_BLOCKLIST": return setBlocklist(message.payload);
-    case "SET_TRUSTED_SITE": return setTrustedSite(message.payload);
+    case "SET_TRUSTED_SITE": return transactionalPolicyUpdate(() => setTrustedSite(message.payload));
     case "RECORD_SCAN": return recordScan(message.payload);
     case "COMPILE_RULES": return compileAllRules();
     case "EXPORT_STATE": return exportState();
-    case "IMPORT_STATE": return importState(message.payload);
-    case "APPLY_RULES_TEXT": return applyRulesText(message.payload);
+    case "IMPORT_STATE": return transactionalPolicyUpdate(() => importState(message.payload));
+    case "APPLY_RULES_TEXT": return transactionalPolicyUpdate(() => applyRulesText(message.payload));
     case "GET_MATCHED_RULES": return getMatchedRules(message.payload);
     default: return { ok: false, error: `Unknown message type: ${message.type}` };
   }
+}
+
+async function snapshotPolicyApplyState() {
+  const [local, session, dynamicRules, sessionRules, enabledRulesets] = await Promise.all([
+    chrome.storage.local.get(POLICY_LOCAL_KEYS),
+    draftStore.get(POLICY_SESSION_KEYS),
+    chrome.declarativeNetRequest.getDynamicRules(),
+    chrome.declarativeNetRequest.getSessionRules(),
+    chrome.declarativeNetRequest.getEnabledRulesets()
+  ]);
+  return { local, session, dynamicRules, sessionRules, enabledRulesets };
+}
+
+async function restoreStorageKeys(area, keys, values) {
+  const missing = keys.filter((key) => !Object.hasOwn(values, key));
+  if (missing.length) await area.remove(missing);
+  if (Object.keys(values).length) await area.set(values);
+}
+
+async function restoreOwnedRules(kind, previousRules, minId, maxId) {
+  const api = chrome.declarativeNetRequest;
+  const currentRules = kind === "dynamic" ? await api.getDynamicRules() : await api.getSessionRules();
+  const currentOwned = currentRules.filter((rule) => rule.id >= minId && rule.id <= maxId);
+  const addRules = previousRules.filter((rule) => rule.id >= minId && rule.id <= maxId);
+  if (JSON.stringify(currentOwned) === JSON.stringify(addRules)) return;
+  const removeRuleIds = currentOwned.map((rule) => rule.id);
+  if (kind === "dynamic") await api.updateDynamicRules({ removeRuleIds, addRules });
+  else await api.updateSessionRules({ removeRuleIds, addRules });
+}
+
+async function restoreEnabledRulesets(previous) {
+  const api = chrome.declarativeNetRequest;
+  const current = await api.getEnabledRulesets();
+  const enableRulesetIds = previous.filter((id) => !current.includes(id));
+  const disableRulesetIds = current.filter((id) => !previous.includes(id));
+  if (enableRulesetIds.length || disableRulesetIds.length) {
+    await api.updateEnabledRulesets({ enableRulesetIds, disableRulesetIds });
+  }
+}
+
+async function rollbackPolicyApplyState(previous) {
+  const results = await Promise.allSettled([
+    restoreEnabledRulesets(previous.enabledRulesets),
+    restoreStorageKeys(chrome.storage.local, POLICY_LOCAL_KEYS, previous.local),
+    restoreStorageKeys(draftStore, POLICY_SESSION_KEYS, previous.session),
+    restoreOwnedRules("dynamic", previous.dynamicRules, DYNAMIC_RULE_BASE_ID, DYNAMIC_RULE_MAX_ID),
+    restoreOwnedRules("session", previous.sessionRules, SESSION_RULE_BASE_ID, SESSION_RULE_MAX_ID)
+  ]);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) throw failure.reason;
+}
+
+function transactionalPolicyUpdate(apply) {
+  return runPolicyApplyTransaction({
+    snapshot: snapshotPolicyApplyState,
+    apply,
+    rollback: rollbackPolicyApplyState
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -792,15 +854,18 @@ async function applyRulesText(payload) {
   await assertNoSpecificityConflicts({ sitePolicies, globalPolicy });
 
   const { settings = {} } = await chrome.storage.local.get(["settings"]);
-  const next = { ...settings, schemaVersion: SCHEMA_VERSION };
-  // The rules-text parser emits settings.defaultMode (or, via the legacy
-  // `default-deny` alias, a boolean defaultDeny). Patch only keys the text set.
-  if (DEFAULT_MODES.includes(settingsPatch.defaultMode)) next.defaultMode = settingsPatch.defaultMode;
-  else if (typeof settingsPatch.defaultDeny === "boolean") next.defaultMode = settingsPatch.defaultDeny ? "hard" : "open";
-  if (typeof settingsPatch.blocklistEnabled === "boolean") next.blocklistEnabled = settingsPatch.blocklistEnabled;
-  delete next.defaultDeny;
+  const target = resolveRulesTextApplyState(
+    { sitePolicies: {}, globalPolicy: {}, switches: {}, settings },
+    { sitePolicies, globalPolicy, switches, settings: settingsPatch }
+  );
+  const next = { ...target.settings, schemaVersion: SCHEMA_VERSION };
 
-  await chrome.storage.local.set({ sitePolicies, globalPolicy, switches, settings: next });
+  await chrome.storage.local.set({
+    sitePolicies: target.sitePolicies,
+    globalPolicy: target.globalPolicy,
+    switches: target.switches,
+    settings: next
+  });
   await draftStore.set({ draftSitePolicies: {}, draftGlobalPolicy: null });
 
   await applyBlocklistSetting();

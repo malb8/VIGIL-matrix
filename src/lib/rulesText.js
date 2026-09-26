@@ -156,6 +156,23 @@ export function parseRulesText(text) {
   return { globalPolicy, sitePolicies, switches, settings, errors };
 }
 
+/* Resolve the exact state transition used by APPLY_RULES_TEXT. Matrix rules
+ * and switches replace their current values; omitted settings are preserved. */
+export function resolveRulesTextApplyState(currentState, parsedState) {
+  const settings = { ...(currentState?.settings || {}) };
+  const patch = parsedState?.settings || {};
+  if (DEFAULT_MODES.includes(patch.defaultMode)) settings.defaultMode = patch.defaultMode;
+  else if (typeof patch.defaultDeny === "boolean") settings.defaultMode = patch.defaultDeny ? "hard" : "open";
+  if (typeof patch.blocklistEnabled === "boolean") settings.blocklistEnabled = patch.blocklistEnabled;
+  delete settings.defaultDeny;
+  return {
+    globalPolicy: parsedState?.globalPolicy || {},
+    sitePolicies: parsedState?.sitePolicies || {},
+    switches: parsedState?.switches || {},
+    settings
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Serialize / canonical lines / diff
  * ------------------------------------------------------------------ */

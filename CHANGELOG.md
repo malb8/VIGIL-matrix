@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0 — 2026-09-26
+
+- Matrix-cell explanations now open on focus instead of mouse hover; ordinary
+  clicks and keyboard controls remain unchanged.
+- Protected browser pages show a concise explanation instead of a raw scripting error.
+- Failed policy changes attempt to restore previous storage, dynamic/session rules
+  and enabled static rulesets, preserving the original error.
+- Rules-text previews preserve omitted mode and blocklist settings, matching Apply.
+- No new permissions; existing installation defaults remain unchanged.
+
 ## 0.14.2 — 2026-09-11
 
 - New installations start in Relaxed protection mode with the bundled privacy

@@ -7,7 +7,7 @@
  *   diff against the committed state, apply. Parsing/serialization/diffing
  *   live in src/lib/rulesText.js so the node test suite covers them.
  */
-import { parseRulesText, serializeRulesText, diffRules } from "./lib/rulesText.js";
+import { parseRulesText, serializeRulesText, diffRules, resolveRulesTextApplyState } from "./lib/rulesText.js";
 
 const policy = document.getElementById("policy");
 const status = document.getElementById("status");
@@ -80,7 +80,8 @@ function parseEditor() {
 
 async function previewDiff() {
   const parsed = parseEditor();
-  const diff = diffRules(await currentRulesState(), parsed);
+  const current = await currentRulesState();
+  const diff = diffRules(current, resolveRulesTextApplyState(current, parsed));
   const lines = [
     ...diff.removed.map((l) => `<span class="del">- ${escapeHtml(l)}</span>`),
     ...diff.added.map((l) => `<span class="add">+ ${escapeHtml(l)}</span>`)
