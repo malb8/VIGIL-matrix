@@ -62,6 +62,7 @@
     <select id="policyPack" title="Apply a local policy pack to observed domains"></select>
     <button id="applyPolicyPack">Apply pack</button>
     <button id="onlyObserved" title="Hide rows with no activity on this page (history/other-scope/policy-only)">Only observed</button>
+    <button id="viewResources">View observed resources</button>
     <button id="showMatches">Show matched rules</button>
   </section>
 
@@ -77,6 +78,17 @@
   <main id="matrix" class="matrix"></main>
   <section id="matches" class="matches" hidden></section>
   <div id="cellInspector" class="cellInspector" role="tooltip" hidden></div>
+
+  <dialog id="observedResources" aria-labelledby="observedResourcesTitle">
+    <h2 id="observedResourcesTitle">Observed resources</h2>
+    <p>Current scan samples, not a complete request log or proof of blocking.
+      Up to 3 URLs per hostname/type are retained, each limited to 240 characters.
+      Response bodies and visual previews are not captured.</p>
+    <label>Hostname <select id="resourceHost"></select></label>
+    <label>Type <select id="resourceType"></select></label>
+    <div id="resourceSamples"></div>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
 
   <footer>
     <button id="exportPolicy">Export</button>

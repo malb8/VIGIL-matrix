@@ -411,3 +411,22 @@ th.domainHead { color: var(--text); }
   box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
 }
 .cellInspector[hidden] { display: none; }
+
+#observedResources {
+  width: min(620px, 90vw);
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+#observedResources::backdrop { background: #0009; }
+#observedResources h2 { margin-top: 0; }
+#observedResources label { display: block; margin: 8px 0; }
+#observedResources select { max-width: 100%; }
+#resourceSamples section { border-top: 1px solid var(--line); margin-top: 12px; }
+#resourceSamples h3 { font-size: 12px; overflow-wrap: anywhere; }
+#resourceSamples ul { padding-left: 18px; }
+#resourceSamples li { overflow-wrap: anywhere; user-select: text; margin: 6px 0; }

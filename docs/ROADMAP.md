@@ -1,7 +1,7 @@
 # Roadmap
 
-Status: v0.15.0 replacement package prepared with observed cell counts
-(experimental research preview); store publication pending. Items are intentions,
+Status: v0.15.1 in development (experimental research preview). v0.15.0 is
+in review at both Chrome Web Store and Edge Add-ons. Items are intentions,
 not promises; ordering reflects current priority.
 
 ## v0.15.0 — focused popup and release hardening
@@ -43,12 +43,19 @@ not promises; ordering reflects current priority.
 
 ## Store release track
 
-- Edge Add-ons review is pending.
-- The earlier v0.15.0 package was submitted to Chrome Web Store. A replacement
-  v0.15.0 package with cell counts is ready for submission to Chrome and Edge;
-  submission of the replacement is not yet confirmed.
+- v0.15.0 is submitted and in review at both Edge Add-ons and Chrome Web Store,
+  as confirmed by the maintainer.
 - Keep store copy and screenshots aligned between Chrome Web Store and Edge
   Add-ons. Both stores use the same MV3 package.
+
+## v0.15.1 — observed resource viewer (unreleased)
+
+- Add a read-only "View observed resources" dialog with hostname/type filters,
+  observed counts, detection sources and retained URL samples.
+- Use existing scan data; disclose the three-sample and 240-character limits.
+  No response bodies, additional permissions or changes to policy enforcement.
+- The maintainer has reviewed and accepted the viewer layout.
+- This viewer is not included in the v0.15.0 packages currently in store review.
 
 ## After v0.15 — candidate features
 

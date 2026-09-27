@@ -141,6 +141,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     render();
   });
   $("trustSite").addEventListener("click", guard(toggleTrustSite));
+  $("viewResources").addEventListener("click", showObservedResources);
+  $("resourceHost").addEventListener("change", renderObservedResources);
+  $("resourceType").addEventListener("change", renderObservedResources);
   $("showMatches").addEventListener("click", guard(toggleMatchedRules));
   $("exportPolicy").addEventListener("click", guard(exportPolicy));
   $("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -1261,4 +1264,52 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// Read-only view of URL samples already retained by the current page scan.
+function showObservedResources() {
+  $("cellInspector").hidden = true;
+  const resources = (scan?.resources || []).filter((item) => OBSERVABLE_TYPES.has(item.type));
+  for (const [id, key, label] of [["resourceHost", "host", "All hostnames"], ["resourceType", "type", "All resource types"]]) {
+    const values = [...new Set(resources.map((item) => item[key]))].sort();
+    $(id).replaceChildren(...["", ...values].map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value || label;
+      return option;
+    }));
+  }
+  renderObservedResources();
+  $("observedResources").showModal();
+}
+
+function renderObservedResources() {
+  const host = $("resourceHost").value;
+  const type = $("resourceType").value;
+  const resources = (scan?.resources || []).filter((item) =>
+    OBSERVABLE_TYPES.has(item.type) && (!host || item.host === host) && (!type || item.type === type));
+  const container = $("resourceSamples");
+  container.replaceChildren();
+  if (!resources.length) {
+    container.textContent = "No observed resources match these filters.";
+    return;
+  }
+  for (const item of resources) {
+    const section = document.createElement("section");
+    const heading = document.createElement("h3");
+    heading.textContent = `${item.host} · ${item.type} · ${item.count} observed`;
+    section.appendChild(heading);
+    const sources = document.createElement("p");
+    sources.textContent = `Detection sources: ${(item.sources || []).join(", ") || "unknown"}`;
+    section.appendChild(sources);
+    const samples = document.createElement("ul");
+    for (const url of item.samples || []) {
+      const li = document.createElement("li");
+      li.textContent = url;
+      samples.appendChild(li);
+    }
+    if (!samples.childNodes.length) samples.textContent = "No URL samples retained.";
+    section.appendChild(samples);
+    container.appendChild(section);
+  }
 }

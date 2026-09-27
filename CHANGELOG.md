@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.1 — Unreleased
+
+- Add an explicit "View observed resources" dialog with hostname and resource-type
+  filters, current-scan counts, detection sources and retained URL samples.
+- The viewer uses existing scan data only: up to three URL samples per hostname/type,
+  limited to 240 characters each. It does not capture response bodies or provide
+  a complete request log. Matrix clicks and focus behaviour remain unchanged.
+- No new permissions or changes to policy enforcement.
+
 ## 0.15.0 — 2026-09-26
 
 - Show nonzero current-scan resource counts in matrix resource-type cells.
